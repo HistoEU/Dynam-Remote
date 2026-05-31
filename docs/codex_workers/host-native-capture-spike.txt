@@ -1,0 +1,41 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+host/native-capture-spike
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/github_issues/09-native-capture-spike.md
+- docs/workstreams/native-capture-and-video-performance.md
+- docs/interfaces/capture-and-video-signaling.md
+- docs/interfaces/input-safety-and-coordinate-mapping.md
+
+Owned scope:
+- New native-capture spike folder, capture research docs, benchmark scripts, capability probes, measured recommendation.
+
+Forbidden scope:
+- Do not remove the Chrome/WebRTC fallback.
+- Do not rewrite phone UI.
+- Do not build paid backend.
+- Do not claim native capture is production-ready without measured evidence.
+
+Concrete tasks:
+1. Summarize why browser capture is insufficient for unattended high-speed remote access.
+2. Compare Windows Graphics Capture, Desktop Duplication, cursor composition, monitor identity, and hardware encode options.
+3. Build the smallest safe capability probe if the environment allows.
+4. Measure or define benchmark fields: FPS, frame time, CPU/GPU use, monitor ID stability, cursor handling, encode path.
+5. Recommend keep fallback, replace with native module, or run deeper spike.
+
+Acceptance evidence:
+- Capture design note.
+- Benchmark output or explicit environment blocker.
+- Recommendation tied to measured/verified facts.
+- Browser fallback remains intact.
+
+Final response must include:
+- Changed files.
+- Tests/benchmarks run.
+- Environment limits.
+- Production path recommendation.
+

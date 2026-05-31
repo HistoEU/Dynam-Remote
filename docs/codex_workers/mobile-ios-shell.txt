@@ -1,0 +1,43 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+mobile/ios-shell
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/github_issues/07-ios-shell.md
+- docs/workstreams/ios-app-shell.md
+- docs/interfaces/control-protocol.md
+- docs/interfaces/session-trust-and-pairing.md
+- docs/interfaces/input-safety-and-coordinate-mapping.md
+- docs/interfaces/capture-and-video-signaling.md
+
+Owned scope:
+- New iOS project folder only, iOS setup docs, App Store review notes, iOS screenshots/tests, iOS compatibility notes.
+
+Forbidden scope:
+- Do not edit host runtime.
+- Do not edit Android project.
+- Do not change browser/PWA behavior unless compatibility requires an interface note.
+- Do not claim App Store readiness without review/privacy/support evidence.
+
+Concrete tasks:
+1. Choose SwiftUI/WKWebView shell or native WebRTC direction and document the tradeoff.
+2. Preserve compatibility with current local Wi-Fi host flow.
+3. Plan Keychain token storage, privacy disclosures, account deletion, and user-owned-host framing.
+4. Cover orientation, safe areas, keyboard, haptics, and app navigation.
+5. Separate MVP shell from later native media implementation.
+
+Acceptance evidence:
+- iOS scaffold/build notes or macOS/Xcode blocker.
+- App Store review-risk checklist updated.
+- Compatibility notes showing what the app expects from the host.
+- No changes to free LAN invariants.
+
+Final response must include:
+- Changed files.
+- Build/test commands run.
+- iOS environment blockers.
+- Store review risks.
+

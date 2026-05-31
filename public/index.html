@@ -1,0 +1,174 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#050403">
+    <title>Remote Controller</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/styles.css?v=68">
+  </head>
+  <body class="phone">
+    <main id="app" class="app-shell">
+      <section id="pairing" class="pairing-panel">
+        <div class="brand-row">
+          <div class="brand-mark">RC</div>
+          <div>
+            <h1>Remote Controller</h1>
+            <p id="pairStatus">Pair with the laptop host.</p>
+          </div>
+        </div>
+        <form id="pairForm" class="pair-form">
+          <label for="deviceName">Device</label>
+          <input id="deviceName" name="deviceName" autocomplete="nickname" value="Phone">
+          <label for="pin">PIN</label>
+          <input id="pin" name="pin" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="000000">
+          <label class="checkbox-row"><input id="keepDeviceSignedIn" type="checkbox"> Keep this device signed in</label>
+          <button type="submit">Pair</button>
+        </form>
+        <div id="connectionHelp" class="connection-help hidden" role="status" aria-live="polite">
+          <strong id="connectionHelpTitle">Connection check</strong>
+          <p id="connectionHelpMessage"></p>
+          <ul id="connectionHelpSteps"></ul>
+          <button id="forgetSession" type="button" class="subtle hidden">Forget Saved Session</button>
+        </div>
+      </section>
+
+      <section id="controller" class="controller hidden">
+        <header class="top-strip">
+          <div>
+            <strong id="monitorName">Primary Display</strong>
+            <span id="connectionState">Disconnected</span>
+          </div>
+          <div class="status-chips">
+            <span id="qualityChip">balanced</span>
+            <span id="latencyChip">0 ms</span>
+            <button id="disconnectBtn" class="danger" title="Disconnect">Stop</button>
+          </div>
+        </header>
+
+        <div id="displayStage" class="display-stage">
+          <video id="rtcVideo" class="rtc-video" autoplay playsinline></video>
+          <canvas id="streamCanvas" width="1280" height="720" aria-label="Remote stream"></canvas>
+        </div>
+        <div id="pointerHalo" class="pointer-halo hidden" aria-hidden="true"></div>
+
+        <section id="touchpadArea" class="touchpad-area" aria-label="Mouse touchpad">
+          <div id="touchpadSurface" class="touchpad-surface">
+            <div id="touchpadCursorHint" class="touchpad-cursor-hint" aria-hidden="true"></div>
+          </div>
+        </section>
+
+        <nav class="control-rail" aria-label="Controls">
+          <button id="keyboardToggleBtn" type="button" class="primary-control" title="Keyboard">Keys</button>
+          <button id="followCursorBtn" type="button" title="Toggle zoom follow">Zoom</button>
+          <button data-sheet="monitorSheet" title="Monitors">Display</button>
+          <button data-sheet="settingsSheet" title="Settings">Settings</button>
+          <button id="controlHoldBtn" type="button" title="Hold Control">Ctrl</button>
+          <button id="windowsShortcutBtn" type="button" title="Open Windows Start">Win</button>
+          <button id="codexShortcutBtn" type="button" title="Open Codex on the laptop">Codex</button>
+          <button id="claudeShortcutBtn" type="button" title="Open Claude on the laptop">Claude</button>
+        </nav>
+
+        <section id="monitorSheet" class="sheet" aria-label="Monitor selector">
+          <div class="sheet-head">
+            <strong>Monitors</strong>
+            <button data-close="monitorSheet">Close</button>
+          </div>
+          <div id="monitorGrid" class="monitor-grid"></div>
+          <div class="capture-source-panel">
+            <strong>Video Source</strong>
+            <div id="captureSourceGrid" class="capture-source-grid"></div>
+          </div>
+        </section>
+
+        <input id="nativeKeyboardInput" class="native-keyboard-bridge" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text" aria-label="Native phone keyboard">
+
+        <section id="keyboardSheet" class="sheet" aria-label="Keyboard controls">
+          <div class="sheet-head">
+            <strong>Keyboard</strong>
+            <button data-close="keyboardSheet">Close</button>
+          </div>
+          <div class="key-grid" id="keyGrid"></div>
+          <form id="textForm" class="text-form">
+            <input id="textInput" placeholder="Text to send">
+            <button type="submit">Send</button>
+          </form>
+        </section>
+
+        <section id="settingsSheet" class="sheet" aria-label="Settings">
+          <div class="sheet-head">
+            <strong>Session</strong>
+            <button data-close="settingsSheet">Close</button>
+          </div>
+          <label>Quality</label>
+          <select id="qualitySelect">
+            <option value="fast">Fast</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="sharp">Sharp</option>
+            <option value="battery">Battery</option>
+          </select>
+          <label>Sensitivity</label>
+          <input id="sensitivity" type="range" min="0.35" max="3.5" step="0.05" value="1.55">
+          <div class="setting-row">
+            <label for="scrollSpeed">Scroll speed</label>
+            <span id="scrollSpeedValue">100%</span>
+          </div>
+          <input id="scrollSpeed" type="range" min="0.35" max="2.5" step="0.05" value="1">
+          <div class="setting-row">
+            <label for="zoomRange">View zoom</label>
+            <span id="zoomValue">100%</span>
+          </div>
+          <input id="zoomRange" type="range" min="1" max="3" step="0.05" value="1">
+          <div class="setting-row">
+            <label for="lensZoomRange">Lens zoom</label>
+            <span id="lensZoomValue">170%</span>
+          </div>
+          <input id="lensZoomRange" type="range" min="1.15" max="3" step="0.05" value="1.7">
+          <div class="setting-row">
+            <label for="lensSizeRange">Lens size</label>
+            <span id="lensSizeValue">100%</span>
+          </div>
+          <input id="lensSizeRange" type="range" min="0.65" max="1.35" step="0.05" value="1">
+          <button id="resetZoomBtn" type="button" class="subtle">Reset View</button>
+          <label class="checkbox-row"><input id="autoFollowCursor" type="checkbox" checked> Follow mouse while zoomed</label>
+          <label class="checkbox-row"><input id="cursorLensEnabled" type="checkbox" checked> Cursor lens</label>
+          <label class="checkbox-row"><input id="cursorLensHold" type="checkbox"> Show lens only while moving</label>
+          <label class="checkbox-row"><input id="showHalo" type="checkbox" checked> Touch halo</label>
+          <label class="checkbox-row"><input id="hapticsEnabled" type="checkbox" checked> Haptic feedback</label>
+          <div class="calibration-panel">
+            <div class="setting-row">
+              <strong>Monitor calibration</strong>
+              <span id="calibrationStatus">Not calibrated</span>
+            </div>
+            <div class="calibration-actions">
+              <button id="calibrationToggleBtn" type="button" class="subtle">Show Targets</button>
+              <button id="calibrationCaptureBtn" type="button" class="subtle">Capture Point</button>
+              <button id="calibrationResetBtn" type="button" class="subtle">Reset</button>
+            </div>
+          </div>
+          <div id="acceptanceProofPanel" class="acceptance-proof-panel hidden">
+            <strong id="acceptanceGateLabel">Proof</strong>
+            <span id="acceptanceStepLabel">Manual phone run</span>
+          </div>
+          <div id="acceptanceChecklist" class="acceptance-checklist hidden">
+            <div class="setting-row">
+              <strong>Proof checklist</strong>
+              <span id="acceptanceChecklistStatus">0 / 0</span>
+            </div>
+            <div id="acceptanceChecklistItems" class="acceptance-checklist-items"></div>
+          </div>
+          <button id="acceptanceMarkBtn" type="button" class="subtle">Mark Proof</button>
+          <p id="acceptanceMarkStatus" class="mini-status"></p>
+          <pre id="diagnostics"></pre>
+        </section>
+      </section>
+    </main>
+  <script src="/app.js?v=68"></script>
+  </body>
+</html>
+
+
+

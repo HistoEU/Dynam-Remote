@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Runtime state, secrets, and local device trust
+data/
+*.pid
+*.log
+server.pid
+server.out.log
+server.err.log
+
+# Generated packages and smoke-test extraction folders
+dist/
+output/
+
+# Incident/disabled scratch copies should never become canonical source
+*.disabled
+*.disabled-by-incident-response
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+

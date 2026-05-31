@@ -1,0 +1,41 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+product/billing-store-readiness
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/github_issues/10-product-billing-store-support.md
+- docs/workstreams/product-billing-store-support.md
+- docs/product_planning/Remote_Controller_Product_Execution_Plan_25_Pages.pdf
+- docs/product_planning/Remote_Controller_Handoff_and_Transfer_Manual.pdf
+
+Owned scope:
+- Product docs, pricing model docs, privacy/legal drafts, support/diagnostics docs, beta/release gates.
+
+Forbidden scope:
+- Do not edit runtime code unless adding non-invasive metadata/docs endpoints through an interface note.
+- Do not define paid remote in a way that breaks free local Wi-Fi.
+- Do not claim legal compliance as finished; draft checklists only.
+
+Concrete tasks:
+1. Define free local GitHub edition vs paid remote subscription boundary.
+2. Create pricing assumptions for direct/P2P and relay-heavy usage.
+3. Draft privacy/data inventory, terms outline, responsible-use wording, and store review notes.
+4. Define support bundle contents that avoid raw screen frames and typed text.
+5. Create closed beta checklist and release criteria.
+
+Acceptance evidence:
+- Pricing model doc.
+- Store/privacy readiness checklist.
+- Support diagnostics spec.
+- Beta/release gate doc.
+- Clear list of items needing lawyer/account/store verification.
+
+Final response must include:
+- Changed files.
+- Research/pricing dates that need rechecking before launch.
+- Risks and missing external approvals.
+- Next product milestone.
+

@@ -1,0 +1,41 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+display/monitor-accuracy
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/github_issues/05-monitor-coordinate-accuracy.md
+- docs/workstreams/monitor-accuracy-and-display-switching.md
+- docs/interfaces/input-safety-and-coordinate-mapping.md
+- docs/interfaces/capture-and-video-signaling.md
+
+Owned scope:
+- Coordinate mapper, monitor metadata handling, display selection diagnostics, targeted display/coordinate tests, small display selector UI only if required.
+
+Forbidden scope:
+- Do not build paid remote backend.
+- Do not scaffold Android/iOS.
+- Do not rewrite unrelated browser UI polish.
+- Do not remove current single-display fallback.
+
+Concrete tasks:
+1. Document the current host/phone monitor metadata path.
+2. Separate selected input monitor, selected capture source, and visible phone display state.
+3. Add tests for side-by-side, stacked, mixed DPI, laptop plus external, same-resolution externals, disconnect/reconnect, and portrait/landscape physical bounds.
+4. Add diagnostics for display ID, bounds, scale, capture source, and selected target.
+5. Preserve stable single-display local Wi-Fi behavior.
+
+Acceptance evidence:
+- Coordinate/display tests pass.
+- Manual multi-monitor checklist exists.
+- Any shared protocol/capture metadata change is documented in docs/interfaces first.
+- Single-display local control remains supported.
+
+Final response must include:
+- Changed files.
+- Tests/checks run.
+- Exact monitor layouts covered.
+- Known browser-capture identity limits.
+

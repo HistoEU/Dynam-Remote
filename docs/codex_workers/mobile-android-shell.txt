@@ -1,0 +1,43 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+mobile/android-shell
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/github_issues/06-android-shell.md
+- docs/workstreams/android-app-shell.md
+- docs/interfaces/control-protocol.md
+- docs/interfaces/session-trust-and-pairing.md
+- docs/interfaces/input-safety-and-coordinate-mapping.md
+- docs/interfaces/capture-and-video-signaling.md
+
+Owned scope:
+- New Android project folder only, Android setup docs, Android shell screenshots/tests, Android compatibility notes.
+
+Forbidden scope:
+- Do not edit host runtime.
+- Do not edit iOS project.
+- Do not alter browser behavior unless writing a compatibility note first.
+- Do not promise native video performance without evidence.
+
+Concrete tasks:
+1. Choose native Kotlin, React Native, Flutter, or WebView shell and document the tradeoff.
+2. Preserve compatibility with current local Wi-Fi pairing and control flow.
+3. Plan Android Keystore-backed secure storage for trusted-device/account tokens.
+4. Cover orientation, safe areas, keyboard, haptics, and app navigation.
+5. Identify what must move to native WebRTC later.
+
+Acceptance evidence:
+- Android project scaffold builds/opens or environment blocker is documented.
+- Screenshot/emulator proof if available.
+- Compatibility notes showing how it connects to the current host.
+- No changes to free LAN invariants.
+
+Final response must include:
+- Changed files.
+- Build/test commands run.
+- Android environment assumptions.
+- Remaining native work.
+

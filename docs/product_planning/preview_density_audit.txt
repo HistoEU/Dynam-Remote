@@ -1,0 +1,37 @@
+Plan preview page count: 25
+plan page 01: non-background density 0.240
+plan page 02: non-background density 0.236
+plan page 03: non-background density 0.226
+plan page 04: non-background density 0.225
+plan page 05: non-background density 0.226
+plan page 06: non-background density 0.229
+plan page 07: non-background density 0.228
+plan page 08: non-background density 0.222
+plan page 09: non-background density 0.221
+plan page 10: non-background density 0.224
+plan page 11: non-background density 0.223
+plan page 12: non-background density 0.225
+plan page 13: non-background density 0.225
+plan page 14: non-background density 0.222
+plan page 15: non-background density 0.220
+plan page 16: non-background density 0.227
+plan page 17: non-background density 0.219
+plan page 18: non-background density 0.217
+plan page 19: non-background density 0.217
+plan page 20: non-background density 0.217
+plan page 21: non-background density 0.219
+plan page 22: non-background density 0.219
+plan page 23: non-background density 0.217
+plan page 24: non-background density 0.225
+plan page 25: non-background density 0.234
+
+Handoff preview page count: 9
+handoff page 01: non-background density 0.156
+handoff page 02: non-background density 0.155
+handoff page 03: non-background density 0.156
+handoff page 04: non-background density 0.155
+handoff page 05: non-background density 0.153
+handoff page 06: non-background density 0.153
+handoff page 07: non-background density 0.155
+handoff page 08: non-background density 0.157
+handoff page 09: non-background density 0.126

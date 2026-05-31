@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Low-Latency Screen Capture</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="capture-host">
+    <main class="capture-shell">
+      <header class="capture-header">
+        <div>
+          <h1>Low-Latency Video</h1>
+          <p id="captureStatus">Ready to share this laptop screen to your phone.</p>
+        </div>
+        <a id="hostConsoleLink" class="button-link" href="/host">Host Console</a>
+      </header>
+
+      <section class="capture-panel">
+        <video id="capturePreview" class="capture-preview" autoplay playsinline muted></video>
+        <div class="capture-controls">
+          <button id="startCaptureBtn" type="button">Start Low-Latency Video</button>
+          <button id="stopCaptureBtn" type="button" class="danger" disabled>Stop</button>
+        </div>
+        <div class="capture-status-grid">
+          <div>
+            <span>Signal</span>
+            <strong id="signalState">idle</strong>
+          </div>
+          <div>
+            <span>Phone</span>
+            <strong id="phoneState">waiting</strong>
+          </div>
+          <div>
+            <span>Video</span>
+            <strong id="videoState">not sharing</strong>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="/capture.js"></script>
+  </body>
+</html>

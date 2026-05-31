@@ -1,0 +1,46 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+browser/pwa-polish
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/CODEX_MULTI_INSTANCE_LAUNCH.md
+- docs/github_issues/03-browser-pwa-regression-lock.md
+- docs/github_issues/04-zoom-lens-settings.md
+- docs/workstreams/browser-pwa-stabilization.md
+- docs/interfaces/control-protocol.md
+- docs/interfaces/input-safety-and-coordinate-mapping.md
+- docs/interfaces/settings-schema.md
+- docs/interfaces/capture-and-video-signaling.md
+
+Owned scope:
+- Browser/PWA controller UI, mobile/desktop browser behavior, touchpad polish, zoom/lens settings, orientation layout, browser regression tests and manual evidence.
+
+Forbidden scope:
+- Do not make free local Wi-Fi require account login or paid services.
+- Do not alter backend protocol without first updating docs/interfaces.
+- Do not start Android/iOS/native capture/paid relay work in this branch.
+
+Concrete tasks:
+1. Inventory current browser UI states: pairing, approval, touchpad, keyboard, zoom, display, settings, reconnect, capture status.
+2. Protect touchpad behavior: visual dot may recenter, real cursor must not recenter.
+3. Protect tap/double-tap/hold, two-finger scroll, edge-hold movement, zoom on/off, hold-to-zoom, lens size, lens level, portrait, and landscape.
+4. Hide noisy diagnostics from normal UI while preserving a deliberate diagnostics path.
+5. Make desktop browser layout usable without breaking phone layout.
+6. Add automated tests where logic is separable; otherwise document manual device/browser gates.
+
+Acceptance evidence:
+- Syntax checks for changed JS.
+- Relevant unit/UI logic tests where possible.
+- Browser/mobile screenshots or manual evidence naming device/browser/network.
+- No stale zoom overlay when zoom is disabled.
+- No regression to local Wi-Fi pairing/control.
+
+Final response must include:
+- Changed files.
+- Tests/checks run.
+- Manual evidence still needed.
+- Known risks and rollback path.
+

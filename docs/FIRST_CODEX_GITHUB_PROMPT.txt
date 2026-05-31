@@ -1,0 +1,64 @@
+You are the Codex instance responsible for creating the private GitHub project for the Remote Controller product.
+
+Start here:
+1. Read docs/GITHUB_CREATOR_HANDOFF.md completely.
+2. Read docs/TRANSFER_MANIFEST.md.
+3. Read docs/GITHUB_MIGRATION_AND_PARALLEL_CODEX.md.
+4. Read docs/GITHUB_ISSUE_BREAKDOWN.md.
+5. Read docs/CODEX_WORKSTREAM_PROMPTS.md.
+6. Read docs/parallel-work-ledger.md.
+7. Read docs/CODEX_MULTI_INSTANCE_LAUNCH.md.
+8. Read docs/GITHUB_READY_CHECKLIST.md.
+9. Read docs/codex_workers/README.md.
+10. Read docs/USER_COMPUTER_SETUP.md.
+11. Read docs/interfaces/README.md.
+12. Read docs/workstreams/README.md.
+13. Read docs/GOAL_STATUS_LEDGER.md.
+14. Skim the two PDFs in docs/product_planning only after reading the command-level docs above.
+
+Your job:
+- Create or verify the private GitHub repository.
+- Initialize/repair local Git only as needed.
+- Commit the clean source set.
+- Tag v0.1-local-wifi-baseline-v76.
+- Push main and the tag.
+- Create labels, milestones, and issues from docs/github_issues.
+- Prepare the multi-Codex worktrees/branches using docs/CODEX_MULTI_INSTANCE_LAUNCH.md after the baseline commit/tag exists.
+- Use docs/codex_workers/*.txt as the exact ready-to-paste prompt set for future Codex instances.
+- Attach or preserve the verified planning packet and source-transfer bundle as release/reference artifacts, not normal tracked source.
+- Preserve docs/interfaces as the contract source for future Codex workers.
+- Preserve docs/workstreams as the starter briefs for future Codex workers.
+- Preserve docs/GOAL_STATUS_LEDGER.md as the honest status map of proved, prepared, missing, and external work.
+
+Use these helper scripts:
+- scripts/list-github-handoff-assets.ps1 to see the handoff files.
+- scripts/audit-source-transfer-bundle.ps1 to prove the source-transfer ZIP is clean and complete.
+- scripts/audit-github-handoff.ps1 to run the one-command handoff readiness audit.
+- scripts/verify-user-computer-setup.ps1 to preview or apply fresh-computer checks.
+- scripts/bootstrap-github-baseline.ps1 to preview or apply the baseline Git commit/tag/push.
+- scripts/github-create-labels-milestones-issues.ps1 to preview or apply GitHub labels, milestones, and issue creation.
+- scripts/create-codex-worktrees.ps1 to preview or apply one worktree per future Codex worker after the baseline commit exists.
+
+Important: verify-user-computer-setup.ps1, bootstrap-github-baseline.ps1, and github-create-labels-milestones-issues.ps1 are dry-run by default. Add -Apply only after reviewing the printed commands.
+
+Hard rules:
+- Do not redesign the product in this first pass.
+- Do not edit runtime behavior unless a validation command fails and the fix is required for the baseline push.
+- Do not commit node_modules, data, dist, output, logs, PID files, host keys, trusted-device stores, disabled scratch files, or private proof artifacts.
+- Do not mark Android, iOS, paid remote access, native capture, or monitor switching complete.
+- Do not make free local Wi-Fi depend on account login or paid backend services.
+
+Required final report:
+- GitHub repo URL
+- Baseline commit hash
+- Baseline tag
+- Labels created
+- Milestones created
+- Issues created
+- Release assets attached or preserved
+- Transfer ZIP audit result
+- Handoff readiness audit result
+- Tests/checks run
+- Files changed
+- Known blockers
+- Which Codex workstream should launch next

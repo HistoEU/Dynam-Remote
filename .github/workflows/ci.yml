@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  node-core:
+    name: Node syntax and core tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        shell: pwsh
+        run: |
+          node --check src\server.js
+          node --check public\app.js
+          node --check public\host.js
+          node --check public\capture.js
+
+      - name: Core tests
+        shell: pwsh
+        run: |
+          node --test `
+            test\protocol.test.js `
+            test\settings-store.test.js `
+            test\session-store.test.js `
+            test\coordinate-mapper.test.js `
+            test\input-adapter.test.js
+

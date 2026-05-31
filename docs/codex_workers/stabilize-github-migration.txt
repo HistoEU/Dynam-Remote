@@ -1,0 +1,54 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+stabilize/github-migration
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/GITHUB_CREATOR_HANDOFF.md
+- docs/GITHUB_READY_CHECKLIST.md
+- docs/TRANSFER_MANIFEST.md
+- docs/GITHUB_MIGRATION_AND_PARALLEL_CODEX.md
+- docs/CODEX_MULTI_INSTANCE_LAUNCH.md
+- docs/GITHUB_ISSUE_BREAKDOWN.md
+- docs/github_issues/01-baseline-repo-and-tag.md
+- docs/github_issues/02-ci-local-validation.md
+- docs/interfaces/README.md
+- docs/workstreams/README.md
+
+Owned scope:
+- GitHub baseline, CI, labels, milestones, issue creation, transfer bundle hygiene, handoff docs, scripts that prepare GitHub/transfer/worktrees.
+
+Forbidden scope:
+- Do not redesign browser controls.
+- Do not change runtime protocol/input/capture behavior unless a validation command fails and the fix is strictly required for baseline.
+- Do not mark Android, iOS, paid remote access, native capture, or monitor switching complete.
+
+Concrete tasks:
+1. Confirm the source tree contains the required files and excludes generated/private files.
+2. Run scripts/list-github-handoff-assets.ps1.
+3. Run scripts/audit-source-transfer-bundle.ps1.
+4. Run scripts/audit-github-handoff.ps1.
+5. Preview scripts/bootstrap-github-baseline.ps1.
+6. Create or verify the private GitHub repo.
+7. Apply the baseline commit/tag only after reviewing staged files.
+8. Create labels, milestones, and issues from docs/github_issues.
+9. Preview scripts/create-codex-worktrees.ps1 and prepare the next worker launch plan.
+
+Acceptance evidence:
+- GitHub repo URL.
+- Baseline commit hash.
+- Baseline tag v0.1-local-wifi-baseline-v76.
+- Transfer ZIP audit result.
+- Handoff audit result.
+- Labels/milestones/issues created.
+- Tests/checks run.
+- Worktree plan and next Codex worker to launch.
+
+Final response must include:
+- Changed files.
+- Commands run.
+- Tests/checks passed or blockers.
+- Release/reference assets preserved.
+- Known remaining product gaps.
+

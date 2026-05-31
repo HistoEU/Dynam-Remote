@@ -1,0 +1,42 @@
+You are a Codex worker for the Remote Controller project.
+
+Worktree/branch:
+infra/remote-signaling
+
+Read before editing:
+- docs/GOAL_STATUS_LEDGER.md
+- docs/CODEX_WORKSTREAM_PROMPTS.md
+- docs/github_issues/08-remote-signaling-turn.md
+- docs/workstreams/remote-networking-and-relay.md
+- docs/interfaces/control-protocol.md
+- docs/interfaces/session-trust-and-pairing.md
+- docs/interfaces/capture-and-video-signaling.md
+
+Owned scope:
+- Remote signaling prototype/design, account/device registry notes, STUN/TURN/relay model, feature-flag plan, relay economics docs.
+
+Forbidden scope:
+- Do not make local Wi-Fi depend on remote services.
+- Do not remove direct LAN mode.
+- Do not collect raw screen frames, typed text, or private input logs.
+- Do not edit browser controls except for scoped mock-client needs.
+
+Concrete tasks:
+1. Define signaling lifecycle: host online, phone session request, approval/trust, offer/answer, ICE candidates, relay fallback, disconnect.
+2. Keep all remote services behind feature flags.
+3. Model relay cost with date-checked pricing fields before launch decisions.
+4. Document auth, token expiry, revoke, session logs, abuse controls, and privacy boundaries.
+5. Build prototype only after the interface contract is written.
+
+Acceptance evidence:
+- Signaling contract doc.
+- Relay/STUN/TURN cost model.
+- Prototype smoke output or explicit environment blocker.
+- Explicit proof that local Wi-Fi remains independent.
+
+Final response must include:
+- Changed files.
+- Tests/checks run.
+- Cost assumptions needing current price verification.
+- Security/privacy risks.
+

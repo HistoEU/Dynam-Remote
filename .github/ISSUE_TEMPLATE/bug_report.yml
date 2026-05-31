@@ -1,0 +1,45 @@
+name: Bug report
+description: Reproducible bug from local Wi-Fi, browser, mobile app, packaging, or remote access.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Exact steps, device, browser/app, network, monitor setup, and host version.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshots, logs, package hash, browser console, or physical-device notes.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Browser/PWA
+        - Android app
+        - iOS app
+        - Windows host
+        - Capture/video
+        - Input/control
+        - Multi-monitor
+        - Packaging/install
+        - Paid remote/backend
+        - Security/trust
+

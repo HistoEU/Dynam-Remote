@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Remote Controller Host</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body class="host">
+    <main class="host-shell">
+      <header class="host-header">
+        <div>
+          <h1>Remote Controller Host</h1>
+          <p id="hostStatus">Starting...</p>
+        </div>
+        <div class="host-actions">
+          <button id="exportLogs">Export Logs</button>
+          <button id="refreshPin">New PIN</button>
+        </div>
+      </header>
+      <section class="host-grid">
+        <article>
+          <h2>Pairing</h2>
+          <div id="pinBox" class="pin-box">------</div>
+          <p id="pinTimer"></p>
+          <p id="rateLimitState"></p>
+        </article>
+        <article class="featured-phone-card">
+          <h2>Use This On Your Phone</h2>
+          <div id="featuredPhoneLink" class="featured-phone-link"></div>
+        </article>
+        <article class="low-latency-card">
+          <h2>Low-Latency Video</h2>
+          <p id="rtcStatusText">Checking...</p>
+          <div class="capture-launch-actions">
+            <button id="openCaptureWindow" type="button">Open Capture Window</button>
+            <button id="captureVideoLink" class="button-link" type="button">Use Existing</button>
+          </div>
+          <small id="captureLaunchStatus"></small>
+        </article>
+        <article>
+          <h2>Addresses</h2>
+          <div id="addressList"></div>
+        </article>
+        <article>
+          <h2>Sessions</h2>
+          <div id="sessionList"></div>
+        </article>
+        <article>
+          <h2>Input Safety</h2>
+          <p id="inputModeState">Dry-run</p>
+          <div class="safety-actions">
+            <button id="toggleInput">Enable Real Input</button>
+            <button id="safetyRelease" class="danger">Release Buttons</button>
+            <button id="killSwitch" class="danger">Stop All Control</button>
+          </div>
+        </article>
+        <article>
+          <h2>Network Risk</h2>
+          <p id="networkRiskState">Checking...</p>
+        </article>
+        <article>
+          <h2>Connection Setup</h2>
+          <div id="connectionSetup" class="connection-setup"></div>
+        </article>
+        <article>
+          <h2>Latest Phone Proof</h2>
+          <div id="latestProof" class="proof-summary"></div>
+        </article>
+        <article>
+          <h2>Physical Proof Links</h2>
+          <div id="proofLinkList" class="proof-link-list"></div>
+        </article>
+        <article>
+          <h2>Host Settings</h2>
+          <form id="settingsForm" class="host-settings-form">
+            <label for="defaultQuality">Default quality</label>
+            <select id="defaultQuality">
+              <option value="fast">Fast</option>
+              <option value="balanced">Balanced</option>
+              <option value="sharp">Sharp</option>
+              <option value="battery">Battery</option>
+            </select>
+            <label for="defaultSensitivity">Default sensitivity</label>
+            <input id="defaultSensitivity" type="range" min="0.35" max="2.5" step="0.05">
+            <label class="checkbox-row"><input id="trustedDevices" type="checkbox"> Trusted devices enabled</label>
+            <label class="checkbox-row"><input id="autoStart" type="checkbox"> Auto-start low-latency video after approval</label>
+            <button type="submit">Apply Settings</button>
+          </form>
+        </article>
+        <article>
+          <h2>Trusted Devices</h2>
+          <div id="trustedDeviceList" class="trusted-device-list"></div>
+          <button id="clearTrustedDevices" class="danger">Clear Trusted Devices</button>
+        </article>
+        <article>
+          <h2>Logs</h2>
+          <div id="logList" class="log-list"></div>
+        </article>
+      </section>
+    </main>
+    <script src="/host.js"></script>
+  </body>
+</html>

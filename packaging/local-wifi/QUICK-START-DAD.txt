@@ -1,0 +1,18 @@
+Remote Controller - Quick Start
+===============================
+
+- Unzip the folder.
+- Install Node.js 20 LTS or newer if it is not already installed:
+  https://nodejs.org/
+- Double-click: Start Remote Controller.bat
+- If Windows Firewall asks, allow access on private/local networks.
+- On the phone, open the URL shown under "Paste this on your phone".
+- Enter the PIN shown in the launcher window.
+- Click Approve on the laptop page.
+- Keep the launcher window open while using it.
+- To stop it, double-click: Stop Remote Controller.bat
+
+Notes:
+- Laptop and phone must be on the same Wi-Fi.
+- This local package is free and does not need an account.
+- Mobile data/different Wi-Fi needs a private network tool such as Tailscale.

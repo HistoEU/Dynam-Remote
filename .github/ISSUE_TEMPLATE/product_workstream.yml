@@ -1,0 +1,40 @@
+name: Product workstream
+description: Chapter-sized product work for one Codex instance.
+title: "[Workstream]: "
+labels: ["workstream"]
+body:
+  - type: input
+    id: chapter
+    attributes:
+      label: Plan chapter/page
+      description: Link the 25-page plan chapter this work implements.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Exact behavior, files, and interfaces owned by this issue.
+      placeholder: "Owns public/app.js zoom settings only; does not edit src/server.js."
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Commands, screenshots, physical tests, package smoke, or performance numbers required before closing.
+    validations:
+      required: true
+  - type: textarea
+    id: protected
+    attributes:
+      label: Protected behavior
+      description: Existing behavior that must not regress.
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Known risks and failure modes
+      description: Mention phone/browser differences, multi-monitor issues, paid/free mode risk, or security implications.
+

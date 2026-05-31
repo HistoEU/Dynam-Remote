@@ -1,0 +1,17 @@
+{
+  "name": "Remote Controller",
+  "short_name": "RemoteCtl",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101415",
+  "theme_color": "#123A45",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

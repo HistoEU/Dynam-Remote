@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Remote Controller">
+  <rect width="256" height="256" rx="48" fill="#101415"/>
+  <rect x="38" y="54" width="180" height="108" rx="18" fill="#123a45" stroke="#38b6a3" stroke-width="10"/>
+  <path d="M80 202h96" stroke="#38b6a3" stroke-width="14" stroke-linecap="round"/>
+  <path d="M128 162v40" stroke="#38b6a3" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="94" cy="108" r="14" fill="#edf3f3"/>
+  <path d="M122 108h48M146 84v48" stroke="#edf3f3" stroke-width="12" stroke-linecap="round"/>
+</svg>
