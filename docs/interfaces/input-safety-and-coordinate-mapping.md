@@ -31,6 +31,18 @@ Touchpad payloads may include visual normalized coordinates, but `mode: "touchpa
 
 Direct touch payloads may use normalized coordinates, mapped into the selected monitor bounds and scale factor.
 
+## Phone Display Stage Transform
+
+The phone display preview is a local visual stage, not the laptop cursor coordinate system. The rendered remote screen may be translated and scaled over a black background so users can inspect details, pan the screen partly off the phone viewport, and zoom around a gesture focal point.
+
+Protected behavior:
+
+- two-finger pan and pinch on the display stage must not send `pointer.move`, wheel, click, drag, or keyboard commands to the host
+- visual stage pan/zoom must stay separate from touchpad relative movement
+- auto-follow may keep the cursor bounded to the true screen edge, but manual stage pan may expose black background beyond any screen edge
+- direct-touch coordinate mapping must invert the current display-stage transform before producing normalized monitor coordinates
+- touches that land on exposed black stage background must not be treated as a new laptop cursor center
+
 ## Monitor Coordinate Mapping
 
 Coordinate mapping must account for:
@@ -68,4 +80,3 @@ node --test test\input-adapter.test.js test\coordinate-mapper.test.js
 ```
 
 If the change affects phone gestures, attach manual phone evidence for iPhone Safari or Android Chrome.
-

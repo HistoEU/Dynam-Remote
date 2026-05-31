@@ -311,6 +311,67 @@ test("phone display gestures zoom and pan the screen without sending laptop inpu
   }
 });
 
+test("phone display stage can be pushed over black without sending laptop input", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      const sent = [];
+      window.__remoteControllerDebug.state.ws = {
+        readyState: WebSocket.OPEN,
+        send(value) {
+          sent.push(JSON.parse(value));
+        }
+      };
+      window.__remoteControllerDebug.state.frame = {
+        width: 1920,
+        height: 1080,
+        desktopLabel: "Black stage test",
+        windows: [],
+        cursor: { x: 960, y: 540, coordinateSpace: "physical-frame", visible: true }
+      };
+      window.__remoteControllerDebug.resetViewport();
+      window.__remoteControllerDebug.drawFrame();
+      const canvas = document.getElementById("streamCanvas");
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 21, pointerType: "touch", clientX: 110, clientY: 130 }));
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 22, pointerType: "touch", clientX: 250, clientY: 130 }));
+      canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 21, pointerType: "touch", clientX: 210, clientY: 175 }));
+      canvas.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerId: 22, pointerType: "touch", clientX: 350, clientY: 175 }));
+      canvas.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 21, pointerType: "touch", clientX: 210, clientY: 175 }));
+      canvas.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 22, pointerType: "touch", clientX: 350, clientY: 175 }));
+      window.__remoteControllerDebug.drawFrame();
+
+      const snapshot = window.__remoteControllerDebug.displayStageSnapshot();
+      const blackPoint = window.__remoteControllerDebug.normalizeCanvasPoint({ x: 6, y: 6 });
+      const ctx = canvas.getContext("2d");
+      const pixel = [...ctx.getImageData(6, 6, 1, 1).data];
+      return {
+        snapshot,
+        blackPoint,
+        pixel,
+        sent: sent.map((item) => item.type)
+      };
+    });
+
+    assert.ok(result.snapshot.stagePanX > 80);
+    assert.ok(result.snapshot.stagePanY > 25);
+    assert.ok(result.snapshot.stageRect.left > 60);
+    assert.ok(result.snapshot.stageRect.top > 20);
+    assert.equal(result.blackPoint.insideStage, false);
+    assert.deepEqual(result.pixel.slice(0, 3), [0, 0, 0]);
+    assert.equal(result.sent.includes("pointer.move"), false);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("phone portrait layout exposes a laptop-style touchpad below the monitor", async () => {
   const browser = await chromium.launch();
   try {
@@ -2962,6 +3023,56 @@ test("phone focal zoom keeps the touched canvas point anchored", async () => {
     assert.ok(Math.abs(result.before.normalizedX - result.after.normalizedX) < 0.002);
     assert.ok(Math.abs(result.before.normalizedY - result.after.normalizedY) < 0.002);
     assert.equal(result.followPaused, true);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("phone focal zoom supports deep inspection without losing the anchor", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      window.__remoteControllerDebug.state.frame = {
+        width: 2560,
+        height: 1440,
+        desktopLabel: "Deep focal zoom",
+        windows: [],
+        cursor: { x: 1720, y: 760, coordinateSpace: "physical-frame", visible: true }
+      };
+      window.__remoteControllerDebug.resetViewport();
+      const metrics = window.__remoteControllerDebug.frameMetrics();
+      const focal = {
+        x: metrics.dx + metrics.drawW * 0.67,
+        y: metrics.dy + metrics.drawH * 0.58
+      };
+      const before = window.__remoteControllerDebug.normalizeCanvasPoint(focal);
+      window.__remoteControllerDebug.setViewportZoom(4.5, { focalCanvasPoint: focal, follow: false });
+      const after = window.__remoteControllerDebug.normalizeCanvasPoint(focal);
+      const snapshot = window.__remoteControllerDebug.displayStageSnapshot();
+      return {
+        before,
+        after,
+        zoom: window.__remoteControllerDebug.state.viewportZoom,
+        zoomSliderMax: document.getElementById("zoomRange").max,
+        lensSliderMax: document.getElementById("lensZoomRange").max,
+        snapshot
+      };
+    });
+
+    assert.equal(result.zoom, 4.5);
+    assert.equal(result.zoomSliderMax, "5");
+    assert.equal(result.lensSliderMax, "5");
+    assert.ok(result.snapshot.stageRect.width > result.snapshot.baseRect.width * 4);
+    assert.ok(Math.abs(result.before.normalizedX - result.after.normalizedX) < 0.002);
+    assert.ok(Math.abs(result.before.normalizedY - result.after.normalizedY) < 0.002);
   } finally {
     await browser.close();
   }

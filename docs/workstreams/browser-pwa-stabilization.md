@@ -45,6 +45,7 @@ Make the browser/PWA controller reliable on phone and usable on desktop without 
 - The real cursor must not recenter when the touchpad visual dot recenters.
 - Touchpad mode must remain relative.
 - Direct touch mode must map through monitor bounds and scale factor.
+- Display-stage pan and zoom are local visual transforms over a black background; two-finger display gestures must not send host input.
 - Duplicate/stale commands must not replay clicks or keys.
 - Zoom off must remove the lens and stale overlays.
 - Keyboard toggle must not break native mobile keyboard.
@@ -76,6 +77,8 @@ Manual gates:
 - Android Chrome if available
 - desktop browser
 - zoom toggle on/off
+- two-finger free pan that pushes the screen partly off the phone viewport into black background
+- deep focal pinch zoom around the gesture point
 - two-finger scroll
 - edge-hold movement
 - keyboard button
@@ -83,4 +86,3 @@ Manual gates:
 ## Done Means
 
 The browser/PWA feels boringly reliable on local Wi-Fi and does not create regressions in host approval, real input safety, capture fallback, or packaging.
-

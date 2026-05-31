@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const CACHE_NAME = "remote-controller-shell-v76";
+const CACHE_NAME = "remote-controller-shell-v77";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -53,6 +53,5 @@ self.addEventListener("fetch", (event) => {
       .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/")))
   );
 });
-
 
 
