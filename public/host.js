@@ -507,11 +507,22 @@ function renderRtcStatus(state) {
     const host = rtc.hostConnected ? "capture page ready" : "capture page closed";
     const phone = rtc.phoneConnected ? "phone ready" : "phone waiting";
     const capture = state.rtcStatus?.host?.capture || {};
-    const source = state.captureLaunch?.captureSourceName || capture.requestedSource || "auto";
-    const monitor = state.captureLaunch?.monitorId || capture.requestedMonitor || state.selectedMonitorId || "display";
-    const autoDetect = state.captureLaunch?.autoDetect;
+    const diagnostics = state.captureDiagnostics || {};
+    const source = diagnostics.requestedCapture?.sourceName || state.captureLaunch?.captureSourceName || capture.requestedSource || "auto";
+    const reported = diagnostics.reportedCapture?.source || capture.reportedSource || capture.displaySurface || "unknown";
+    const monitor = diagnostics.selectedInputMonitor?.id || state.captureLaunch?.monitorId || capture.requestedMonitor || state.selectedMonitorId || "display";
+    const visible = diagnostics.phoneVisibleDisplay?.id || capture.requestedMonitor || monitor;
+    const autoDetect = diagnostics.correction || state.captureLaunch?.autoDetect;
     const detectText = autoDetect?.status && autoDetect.status !== "idle" ? ` - ${autoDetect.status}` : "";
-    const modeHint = rtc.hostConnected ? `${monitor} via ${source}${detectText}` : "open capture window for smooth video";
+    const divergence = Array.isArray(diagnostics.divergence) && diagnostics.divergence.length
+      ? ` - ${diagnostics.divergence.join(", ")}`
+      : "";
+    const actualSize = diagnostics.actualSize?.width && diagnostics.actualSize?.height
+      ? ` - ${diagnostics.actualSize.width}x${diagnostics.actualSize.height}`
+      : "";
+    const modeHint = rtc.hostConnected
+      ? `input ${monitor}, phone ${visible}, requested ${source}, reported ${reported}${actualSize}${detectText}${divergence}`
+      : "open capture window for smooth video";
     el.rtcStatusText.textContent = `${rtc.state || "idle"} - ${host} - ${phone} - ${modeHint}`;
   }
   if (el.captureVideoLink) {

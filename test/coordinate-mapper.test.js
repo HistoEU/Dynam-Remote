@@ -99,6 +99,43 @@ test("coordinate mapper handles portrait and differently scaled monitors by phys
   });
 });
 
+test("coordinate mapper distinguishes laptop plus identical external layouts by bounds", () => {
+  const laptop = {
+    id: "laptop",
+    scaleFactor: 1.25,
+    bounds: { left: 0, top: 0, width: 2560, height: 1600 }
+  };
+  const externalLeft = {
+    id: "external-left",
+    scaleFactor: 1,
+    bounds: { left: -1920, top: 260, width: 1920, height: 1080 }
+  };
+  const externalRightSameSize = {
+    id: "external-right",
+    scaleFactor: 1,
+    bounds: { left: 2560, top: 260, width: 1920, height: 1080 }
+  };
+
+  assert.deepEqual(mapNormalizedToMonitor({ normalizedX: 0.5, normalizedY: 0.5 }, laptop), {
+    x: 1280,
+    y: 800,
+    normalizedX: 0.5,
+    normalizedY: 0.5
+  });
+  assert.deepEqual(mapNormalizedToMonitor({ normalizedX: 0.5, normalizedY: 0.5 }, externalLeft), {
+    x: -960,
+    y: 800,
+    normalizedX: 0.5,
+    normalizedY: 0.5
+  });
+  assert.deepEqual(mapNormalizedToMonitor({ normalizedX: 0.5, normalizedY: 0.5 }, externalRightSameSize), {
+    x: 3520,
+    y: 800,
+    normalizedX: 0.5,
+    normalizedY: 0.5
+  });
+});
+
 test("coordinate mapper falls back safely for malformed monitor bounds", () => {
   assert.deepEqual(mapNormalizedToMonitor({ normalizedX: 0.5, normalizedY: 0.5 }, {
     bounds: { left: "bad", top: Infinity, width: 0, height: -100 }

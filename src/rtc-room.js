@@ -24,18 +24,33 @@ function cleanPeer(peer) {
   };
 }
 
+function cleanString(value, maxLength = 120) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, maxLength) : "";
+}
+
+function cleanNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
 function cleanCaptureMetadata(payload = {}) {
   return {
     sharing: Boolean(payload.sharing),
-    width: Number.isFinite(Number(payload.width)) ? Number(payload.width) : 0,
-    height: Number.isFinite(Number(payload.height)) ? Number(payload.height) : 0,
-    frameRate: Number.isFinite(Number(payload.frameRate)) ? Number(payload.frameRate) : 0,
-    displaySurface: typeof payload.displaySurface === "string" ? payload.displaySurface.slice(0, 80) : "",
-    audioTracks: Number.isFinite(Number(payload.audioTracks)) ? Number(payload.audioTracks) : 0,
-    audioSource: typeof payload.audioSource === "string" ? payload.audioSource.slice(0, 80) : "",
+    width: cleanNumber(payload.width),
+    height: cleanNumber(payload.height),
+    frameRate: cleanNumber(payload.frameRate),
+    displaySurface: cleanString(payload.displaySurface, 80),
+    reportedSource: cleanString(payload.reportedSource || payload.displaySurface, 120),
+    audioTracks: cleanNumber(payload.audioTracks),
+    audioSource: cleanString(payload.audioSource, 80),
     microphone: Boolean(payload.microphone),
-    requestedMonitor: typeof payload.requestedMonitor === "string" ? payload.requestedMonitor.slice(0, 80) : "",
-    requestedSource: typeof payload.requestedSource === "string" ? payload.requestedSource.slice(0, 120) : "",
+    requestedMonitor: cleanString(payload.requestedMonitor, 80),
+    requestedSource: cleanString(payload.requestedSource, 120),
+    connectionState: cleanString(payload.connectionState, 40),
+    iceConnectionState: cleanString(payload.iceConnectionState, 40),
+    firstFrameTimeMs: cleanNumber(payload.firstFrameTimeMs),
+    staleCaptureAgeMs: cleanNumber(payload.staleCaptureAgeMs),
+    fallbackReason: cleanString(payload.fallbackReason, 160),
     updatedAt: Date.now()
   };
 }
@@ -188,6 +203,9 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     const routedTypes = new Set(["rtc.offer", "rtc.answer", "rtc.ice", "rtc.stop", "rtc.status"]);
     if (validation.type === "rtc.ping") {
       sendTo(peer, { type: "rtc.pong", payload: { room: publicState() } });
+      return { ok: true, routed: false, state: publicState() };
+    }
+    if (validation.type === "rtc.status" && !other) {
       return { ok: true, routed: false, state: publicState() };
     }
     if (validation.type === "rtc.ready") {

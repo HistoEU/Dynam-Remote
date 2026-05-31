@@ -21,6 +21,9 @@ const el = {
   signal: document.getElementById("signalState"),
   phone: document.getElementById("phoneState"),
   video: document.getElementById("videoState"),
+  ice: document.getElementById("iceState"),
+  source: document.getElementById("sourceState"),
+  firstFrame: document.getElementById("firstFrameState"),
   hostConsole: document.getElementById("hostConsoleLink")
 };
 
@@ -30,7 +33,11 @@ const capture = {
   stream: null,
   phoneReady: false,
   makingOffer: false,
-  queuedIce: []
+  queuedIce: [],
+  startedAt: 0,
+  firstFrameAt: 0,
+  fallbackReason: "",
+  statsTimer: null
 };
 
 setInterval(() => {
@@ -46,6 +53,10 @@ function setStatus(message, parts = {}) {
   if (parts.signal) el.signal.textContent = parts.signal;
   if (parts.phone) el.phone.textContent = parts.phone;
   if (parts.video) el.video.textContent = parts.video;
+  if (parts.ice && el.ice) el.ice.textContent = parts.ice;
+  if (parts.source && el.source) el.source.textContent = parts.source;
+  if (parts.firstFrame && el.firstFrame) el.firstFrame.textContent = parts.firstFrame;
+  updateCaptureDiagnosticsUi();
 }
 
 function sendRtc(type, payload = {}) {
@@ -110,18 +121,59 @@ function connectSignal() {
 function currentCaptureMeta() {
   const track = capture.stream?.getVideoTracks()[0];
   const settings = track?.getSettings?.() || {};
+  const width = Number(settings.width || 0);
+  const height = Number(settings.height || 0);
+  const reportedSource = String(settings.displaySurface || (track ? "unknown" : "")).slice(0, 80);
   return {
     sharing: Boolean(track),
-    width: settings.width || 0,
-    height: settings.height || 0,
+    width,
+    height,
     frameRate: settings.frameRate || 0,
     displaySurface: settings.displaySurface || "",
+    reportedSource,
     audioTracks: capture.stream?.getAudioTracks?.().length || 0,
     audioSource: "system-output-only",
     microphone: false,
     requestedMonitor,
-    requestedSource
+    requestedSource,
+    connectionState: capture.pc?.connectionState || "",
+    iceConnectionState: capture.pc?.iceConnectionState || "",
+    firstFrameTimeMs: capture.startedAt && capture.firstFrameAt ? capture.firstFrameAt - capture.startedAt : 0,
+    staleCaptureAgeMs: 0,
+    fallbackReason: capture.fallbackReason || ""
   };
+}
+
+function updateCaptureDiagnosticsUi() {
+  const meta = currentCaptureMeta();
+  if (el.source) {
+    const size = meta.width && meta.height ? ` ${meta.width}x${meta.height}` : "";
+    el.source.textContent = `${meta.reportedSource || "unknown"}${size}`;
+  }
+  if (el.ice) el.ice.textContent = meta.iceConnectionState || "idle";
+  if (el.firstFrame) {
+    el.firstFrame.textContent = meta.firstFrameTimeMs ? `${meta.firstFrameTimeMs}ms` : "waiting";
+  }
+}
+
+function markFirstFrame() {
+  if (!capture.startedAt || capture.firstFrameAt) return;
+  capture.firstFrameAt = Date.now();
+  updateCaptureDiagnosticsUi();
+  sendRtc("rtc.status", currentCaptureMeta());
+}
+
+function startStatsTimer() {
+  clearInterval(capture.statsTimer);
+  capture.statsTimer = setInterval(() => {
+    updateCaptureDiagnosticsUi();
+    sendRtc("rtc.status", currentCaptureMeta());
+  }, 2000);
+}
+
+function stopStatsTimer() {
+  clearInterval(capture.statsTimer);
+  capture.statsTimer = null;
 }
 
 async function startCapture() {
@@ -131,6 +183,9 @@ async function startCapture() {
       return;
     }
     setStatus(`Starting ${requestedSource}. Choose it if Chrome asks.`, { video: "asking permission" });
+    capture.startedAt = Date.now();
+    capture.firstFrameAt = 0;
+    capture.fallbackReason = "";
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: {
         displaySurface: "monitor",
@@ -146,11 +201,15 @@ async function startCapture() {
       } catch {}
     }
     el.preview.srcObject = stream;
+    el.preview.addEventListener("loadeddata", markFirstFrame, { once: true });
+    el.preview.addEventListener("playing", markFirstFrame, { once: true });
     el.start.disabled = true;
     el.stop.disabled = false;
+    stream.getVideoTracks()[0].addEventListener("unmute", markFirstFrame, { once: true });
     stream.getVideoTracks()[0].addEventListener("ended", () => stopCapture("screen-share-ended"));
     const audioCount = stream.getAudioTracks().length;
     setStatus(`Sharing ${requestedSource}${audioCount ? " with audio" : ""}. Keep this page open while using the phone.`, { video: "sharing" });
+    startStatsTimer();
     hideCaptureWindowSoon("capture-sharing");
     connectSignal();
     sendRtc("rtc.ready", currentCaptureMeta());
@@ -160,9 +219,11 @@ async function startCapture() {
     const message = denied
       ? "Screen sharing was blocked. Use the default Chrome or Edge window opened from Host Console, then click Start again."
       : `Screen sharing did not start: ${error.message}`;
+    capture.fallbackReason = denied ? "permission-denied" : String(error.message || "capture-start-failed").slice(0, 160);
     setStatus(message, { video: "not sharing" });
     el.start.disabled = false;
     el.stop.disabled = true;
+    sendRtc("rtc.status", currentCaptureMeta());
   }
 }
 
@@ -170,16 +231,21 @@ function closePeer() {
   if (!capture.pc) return;
   capture.pc.onicecandidate = null;
   capture.pc.onconnectionstatechange = null;
+  capture.pc.oniceconnectionstatechange = null;
   capture.pc.close();
   capture.pc = null;
   capture.queuedIce = [];
 }
 
 function stopCapture(reason = "manual") {
+  capture.fallbackReason = reason;
   sendRtc("rtc.stop", { reason });
   closePeer();
+  stopStatsTimer();
   for (const track of capture.stream?.getTracks?.() || []) track.stop();
   capture.stream = null;
+  capture.startedAt = 0;
+  capture.firstFrameAt = 0;
   el.preview.srcObject = null;
   el.start.disabled = false;
   el.stop.disabled = true;
@@ -213,8 +279,13 @@ function ensurePeer() {
     const state = pc.connectionState;
     setStatus(
       state === "connected" ? "Live video is connected to the phone." : `Video connection: ${state}`,
-      { signal: state, phone: capture.phoneReady ? "connected" : "waiting" }
+      { signal: state, phone: capture.phoneReady ? "connected" : "waiting", ice: pc.iceConnectionState }
     );
+    sendRtc("rtc.status", currentCaptureMeta());
+  };
+  pc.oniceconnectionstatechange = () => {
+    setStatus(`ICE connection: ${pc.iceConnectionState}`, { ice: pc.iceConnectionState });
+    sendRtc("rtc.status", currentCaptureMeta());
   };
   capture.pc = pc;
   return pc;

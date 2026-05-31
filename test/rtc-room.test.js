@@ -120,3 +120,45 @@ test("rtc signal validation accepts null end-of-candidates markers", () => {
   });
   assert.equal(result.ok, true);
 });
+
+test("rtc room sanitizes capture source and performance diagnostics", () => {
+  const { room } = createHarness();
+  const host = room.connectPeer({ role: "host", label: "Capture page" }).peer;
+
+  const result = room.handleMessage(host.id, {
+    type: "rtc.status",
+    payload: {
+      sharing: true,
+      width: "2560",
+      height: "1440",
+      frameRate: "59.94",
+      displaySurface: "monitor",
+      reportedSource: "monitor selected by browser",
+      audioTracks: 0,
+      audioSource: "system-output-only",
+      microphone: true,
+      requestedMonitor: "display-2",
+      requestedSource: "Screen 2",
+      connectionState: "connected",
+      iceConnectionState: "completed",
+      firstFrameTimeMs: "421",
+      staleCaptureAgeMs: "13001",
+      fallbackReason: "manual source confirmation required"
+    }
+  });
+
+  assert.equal(result.ok, true);
+  const capture = room.getState().host.capture;
+  assert.equal(capture.sharing, true);
+  assert.equal(capture.width, 2560);
+  assert.equal(capture.height, 1440);
+  assert.equal(capture.frameRate, 59.94);
+  assert.equal(capture.reportedSource, "monitor selected by browser");
+  assert.equal(capture.connectionState, "connected");
+  assert.equal(capture.iceConnectionState, "completed");
+  assert.equal(capture.firstFrameTimeMs, 421);
+  assert.equal(capture.staleCaptureAgeMs, 13001);
+  assert.equal(capture.fallbackReason, "manual source confirmation required");
+  assert.equal(capture.requestedMonitor, "display-2");
+  assert.equal(capture.requestedSource, "Screen 2");
+});

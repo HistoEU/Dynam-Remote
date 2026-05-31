@@ -48,6 +48,17 @@ Coordinate mapping must account for:
 
 Workers changing display behavior must not assume all monitors start at `(0, 0)` or share scale factor `1`.
 
+## Monitor, Capture, and Phone-Visible State
+
+The product must treat these as separate state:
+
+- selected input monitor: the monitor that receives pointer/direct-touch coordinates
+- requested capture source: the monitor/source requested when launching browser capture
+- reported capture source: the safe source category and dimensions reported by the browser/WebRTC track
+- phone-visible display: the display the phone should currently be showing
+
+If any of these diverge, diagnostics must expose the mismatch and direct-touch behavior must remain conservative. Touchpad-relative movement remains the safest fallback because it does not depend on exact capture-to-monitor pixel identity.
+
 ## Click, Drag, Scroll, and Keyboard Invariants
 
 Protected behavior:
@@ -68,4 +79,3 @@ node --test test\input-adapter.test.js test\coordinate-mapper.test.js
 ```
 
 If the change affects phone gestures, attach manual phone evidence for iPhone Safari or Android Chrome.
-

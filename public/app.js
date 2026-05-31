@@ -119,6 +119,7 @@ const state = {
   selectedMonitorId: "display-1",
   monitors: [],
   captureLaunch: null,
+  captureDiagnostics: null,
   frame: null,
   inputMode: "touchpad",
   dragLock: false,
@@ -1335,6 +1336,7 @@ function applyState(next) {
   state.selectedMonitorId = nextMonitorId;
   state.streamStats = next.streamStats || state.streamStats;
   state.captureLaunch = next.captureLaunch || state.captureLaunch;
+  state.captureDiagnostics = next.captureDiagnostics || state.captureDiagnostics;
   if (next.rtcStatus) state.rtcStatus = next.rtcStatus.state || state.rtcStatus;
   if (next.settings && !state.defaultSettingsApplied) {
     if (!localStorage.getItem("remote-sensitivity")) {
@@ -3962,6 +3964,7 @@ function debugSnapshot(lastAck = null) {
     sessionId: state.sessionId,
     monitor: state.selectedMonitorId,
     selectedMonitor: selectedMonitor(),
+    captureDiagnostics: state.captureDiagnostics,
     frameGeometry: state.frame?.monitorGeometry || null,
     frameSize: state.frame ? { width: state.frame.width, height: state.frame.height } : null,
     bitmapSize: state.frameImage ? {
@@ -4246,5 +4249,4 @@ window.__remoteControllerDebug = {
   acceptanceChecklistState,
   updateAcceptanceChecklistUi
 };
-
 
