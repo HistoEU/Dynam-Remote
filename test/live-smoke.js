@@ -405,8 +405,7 @@ async function main() {
   const finalState = await api(`/api/host?key=${encodeURIComponent(hostKey)}`);
   assert.equal(finalState.selectedMonitorId, targetMonitorId);
   assert.equal(finalState.logs.some((entry) => entry.event === "input.dryRun"), true);
-  assert.equal(finalState.logs.some((entry) => entry.event === "monitor.select"), true);
-  const proofLog = finalState.logs.find((entry) => entry.event === "acceptance.phoneMark");
+  const proofLog = finalState.latestPhoneProof;
   assert.equal(Boolean(proofLog), true);
   assert.equal(proofLog.detail.proof.viewport.width, 390);
   assert.equal(proofLog.detail.proof.features.touch, true);
@@ -448,6 +447,7 @@ async function main() {
   const exportedLogs = await api(`/api/logs?key=${encodeURIComponent(hostKey)}`);
   assert.equal(Array.isArray(exportedLogs.logs), true);
   assert.equal(exportedLogs.logs.length >= 1, true);
+  assert.equal(exportedLogs.logs.some((entry) => entry.event === "monitor.select"), true);
   assert.equal(exportedLogs.latestPhoneProof.event, "acceptance.phoneMark");
   assert.equal(exportedLogs.logs.some((entry) => entry.id === exportedLogs.latestPhoneProof.id), true);
   assert.equal(exportedLogs.state.streamStats.source, finalState.streamStats.source);

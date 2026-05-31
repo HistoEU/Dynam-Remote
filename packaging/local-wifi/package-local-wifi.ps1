@@ -18,14 +18,25 @@ foreach ($dir in $copyDirs) {
 }
 
 Copy-Item -LiteralPath (Join-Path $Root "package-lock.json") -Destination (Join-Path $Staging "package-lock.json") -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Start Remote Controller.bat") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Stop Remote Controller.bat") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "README-FIRST.txt") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "QUICK-START-DAD.txt") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "START-HERE-FRESH-INSTALL.txt") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "start-local-wifi.ps1") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "stop-local-wifi.ps1") -Destination $Staging -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "smoke-local-wifi.ps1") -Destination $Staging -Force
+$packageFiles = @(
+  "Start Remote Controller.bat",
+  "Stop Remote Controller.bat",
+  "OpenHostLink.bat",
+  "README-FIRST.txt",
+  "QUICK-START-DAD.txt",
+  "START-HERE-FRESH-INSTALL.txt",
+  "start-local-wifi.ps1",
+  "stop-local-wifi.ps1",
+  "smoke-local-wifi.ps1"
+)
+
+foreach ($file in $packageFiles) {
+  $source = Join-Path $PSScriptRoot $file
+  if (-not (Test-Path -LiteralPath $source)) {
+    throw "Packaging file missing: $source"
+  }
+  Copy-Item -LiteralPath $source -Destination $Staging -Force
+}
 
 $rootPackage = Get-Content -Raw -LiteralPath (Join-Path $Root "package.json") | ConvertFrom-Json
 $packageManifest = [ordered]@{
@@ -48,7 +59,9 @@ $packageManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path
 
 Push-Location $Staging
 try {
-  npm ci --omit=dev
+  $npm = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+  if (-not $npm) { $npm = Get-Command "npm" -ErrorAction Stop }
+  & $npm.Source ci --omit=dev
 } finally {
   Pop-Location
 }

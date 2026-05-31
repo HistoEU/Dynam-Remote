@@ -40,5 +40,9 @@ jobs:
             test\settings-store.test.js `
             test\session-store.test.js `
             test\coordinate-mapper.test.js `
-            test\input-adapter.test.js
+            test\input-adapter.test.js `
+            test\rtc-room.test.js `
+            test\capture-adapter.test.js `
+            test\github-migration-contracts.test.js `
+            test\local-wifi-packaging.test.js
 

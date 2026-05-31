@@ -11,6 +11,7 @@
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $resolvedOutputDir = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $root $OutputDir }
+$playwrightOutputDir = Join-Path $root "output\playwright"
 $existing = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -First 1
 $qaPort = $Port
 $preservedExistingPid = $null
@@ -246,8 +247,14 @@ try {
 
   Push-Location $root
   try {
+    New-Item -ItemType Directory -Force -Path $playwrightOutputDir | Out-Null
+    $rootTestDir = Join-Path $root "test"
+    $testFiles = @(Get-ChildItem -LiteralPath $rootTestDir -Filter "*.js" | Sort-Object Name | ForEach-Object { $_.FullName })
+    if ($testFiles.Count -eq 0) {
+      throw "No root test files found in $rootTestDir."
+    }
     $nodeTestLines = [System.Collections.Generic.List[string]]::new()
-    & $NodePath --test 2>&1 | ForEach-Object {
+    & $NodePath --test @testFiles 2>&1 | ForEach-Object {
       $line = "$_"
       $nodeTestLines.Add($line) | Out-Null
       $line

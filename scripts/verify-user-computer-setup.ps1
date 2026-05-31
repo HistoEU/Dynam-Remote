@@ -37,13 +37,27 @@ function Run-Step {
     Add-Line "DRY RUN skipped. Re-run with -Apply to execute."
     return
   }
-  try {
-    Invoke-Expression $Command *>&1 | ForEach-Object { Add-Line ("  " + $_.ToString()) }
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = "cmd.exe"
+  $startInfo.Arguments = "/d /s /c ""$Command"""
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  $stdout = $process.StandardOutput.ReadToEnd()
+  $stderr = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+  $commandOutput = @()
+  if (-not [string]::IsNullOrWhiteSpace($stdout)) { $commandOutput += ($stdout -split "`r?`n") }
+  if (-not [string]::IsNullOrWhiteSpace($stderr)) { $commandOutput += ($stderr -split "`r?`n") }
+  foreach ($line in ($commandOutput | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+    Add-Line ("  " + $line.ToString())
+  }
+  if ($process.ExitCode -eq 0) {
     Add-Line "OK $Name"
-  } catch {
+  } else {
     Add-Line "FAIL $Name"
-    Add-Line $_.Exception.Message
-    throw
+    throw "Step '$Name' exited with code $($process.ExitCode)."
   }
 }
 
@@ -89,23 +103,31 @@ try {
   Add-Line ""
   Add-Line "Commands"
   $nodeOk = Test-CommandAvailable "node"
-  $npmOk = Test-CommandAvailable "npm"
+  $npmCommand = "npm"
+  $npmCmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+  if ($npmCmd) {
+    Add-Line "OK command npm.cmd => $($npmCmd.Source)"
+    $npmCommand = "npm.cmd"
+    $npmOk = $true
+  } else {
+    $npmOk = Test-CommandAvailable "npm"
+  }
   $gitOk = Test-CommandAvailable "git"
   Test-CommandAvailable "gh" | Out-Null
 
   if ($nodeOk) { Run-Step "node version" "node --version" }
-  if ($npmOk) { Run-Step "npm version" "npm --version" }
+  if ($npmOk) { Run-Step "npm version" "$npmCommand --version" }
   if ($gitOk) { Run-Step "git version" "git --version" }
 
   if ($npmOk) {
-    Run-Step "install dependencies" "npm ci"
+    Run-Step "install dependencies" "$npmCommand ci"
   }
   if ($nodeOk) {
     Run-Step "syntax server" "node --check src\server.js"
     Run-Step "syntax app" "node --check public\app.js"
     Run-Step "syntax host" "node --check public\host.js"
     Run-Step "syntax capture" "node --check public\capture.js"
-    Run-Step "protected tests" "node --test test\protocol.test.js test\settings-store.test.js test\session-store.test.js test\coordinate-mapper.test.js test\input-adapter.test.js"
+    Run-Step "protected tests" "node --test test\protocol.test.js test\settings-store.test.js test\session-store.test.js test\coordinate-mapper.test.js test\input-adapter.test.js test\rtc-room.test.js test\capture-adapter.test.js"
   }
 
   Add-Line ""

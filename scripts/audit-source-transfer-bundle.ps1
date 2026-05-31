@@ -6,7 +6,17 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path -LiteralPath $ZipPath)) {
-  throw "Transfer ZIP not found: $ZipPath"
+  [pscustomobject]@{
+    status = "missing"
+    zipPath = [System.IO.Path]::GetFullPath($ZipPath)
+    hashPath = [System.IO.Path]::GetFullPath($HashPath)
+    message = "The source transfer zip is not present in this checkout. This is expected in a fresh clone because dist is intentionally ignored."
+    nextAction = "Package or copy dist\RemoteController-SourceTransfer.zip and its .sha256 sidecar before running the cleanliness audit."
+    missingRequiredCount = $null
+    forbiddenCount = $null
+    sidecarMatches = $false
+  } | ConvertTo-Json -Depth 4
+  exit 1
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -45,6 +55,15 @@ $requiredSuffixes = @(
   "scripts/github-create-labels-milestones-issues.ps1",
   "scripts/create-codex-worktrees.ps1",
   "scripts/verify-user-computer-setup.ps1",
+  "packaging/local-wifi/package-local-wifi.ps1",
+  "packaging/local-wifi/Start Remote Controller.bat",
+  "packaging/local-wifi/Stop Remote Controller.bat",
+  "packaging/local-wifi/start-local-wifi.ps1",
+  "packaging/local-wifi/stop-local-wifi.ps1",
+  "packaging/local-wifi/smoke-local-wifi.ps1",
+  "packaging/local-wifi/README-FIRST.txt",
+  "packaging/local-wifi/QUICK-START-DAD.txt",
+  "packaging/local-wifi/START-HERE-FRESH-INSTALL.txt",
   "src/server.js",
   "public/app.js",
   "public/host.js",
@@ -53,7 +72,11 @@ $requiredSuffixes = @(
   "test/settings-store.test.js",
   "test/session-store.test.js",
   "test/coordinate-mapper.test.js",
-  "test/input-adapter.test.js"
+  "test/input-adapter.test.js",
+  "test/rtc-room.test.js",
+  "test/capture-adapter.test.js",
+  "test/github-migration-contracts.test.js",
+  "test/local-wifi-packaging.test.js"
 )
 
 $forbiddenPatterns = @(
@@ -107,6 +130,7 @@ if (Test-Path -LiteralPath $HashPath) {
 }
 
 $result = [pscustomobject]@{
+  status = if (($missingRequired | Measure-Object).Count -eq 0 -and ($forbidden | Sort-Object -Unique | Measure-Object).Count -eq 0 -and $sidecarHash -eq $hash.Hash) { "pass" } else { "fail" }
   zipPath = (Resolve-Path -LiteralPath $ZipPath).Path
   entryCount = ($names | Measure-Object).Count
   sha256 = $hash.Hash

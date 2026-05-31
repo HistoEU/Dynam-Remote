@@ -80,7 +80,15 @@ $requiredFiles = @(
   "test/settings-store.test.js",
   "test/session-store.test.js",
   "test/coordinate-mapper.test.js",
-  "test/input-adapter.test.js"
+  "test/input-adapter.test.js",
+  "test/rtc-room.test.js",
+  "test/capture-adapter.test.js",
+  "test/github-migration-contracts.test.js",
+  "test/local-wifi-packaging.test.js",
+  "packaging/local-wifi/Start Remote Controller.bat",
+  "packaging/local-wifi/start-local-wifi.ps1",
+  "packaging/local-wifi/smoke-local-wifi.ps1",
+  "packaging/local-wifi/stop-local-wifi.ps1"
 )
 
 $missingFiles = @($requiredFiles | Where-Object { -not (Test-RelativePath $_) })
@@ -187,7 +195,9 @@ if ($zipAuditFailed) {
   Add-Finding $findings "source transfer zip" "fail" $zipAuditOutput.Trim()
 } else {
   $zipAudit = $zipAuditOutput | ConvertFrom-Json
-  if ($zipAudit.missingRequiredCount -eq 0 -and $zipAudit.forbiddenCount -eq 0 -and $zipAudit.sidecarMatches) {
+  if ($zipAudit.status -eq "missing") {
+    Add-Finding $findings "source transfer zip" "fail" "$($zipAudit.message) Next action: $($zipAudit.nextAction)"
+  } elseif ($zipAudit.missingRequiredCount -eq 0 -and $zipAudit.forbiddenCount -eq 0 -and $zipAudit.sidecarMatches) {
     Add-Finding $findings "source transfer zip" "pass" "ZIP clean, required files present, sidecar hash matches"
   } else {
     Add-Finding $findings "source transfer zip" "fail" "missing=$($zipAudit.missingRequiredCount), forbidden=$($zipAudit.forbiddenCount), sidecarMatches=$($zipAudit.sidecarMatches)"
@@ -198,7 +208,7 @@ if ($RunTests) {
   $testOutput = $null
   $testFailed = $false
   try {
-    $testOutput = & node --test test\protocol.test.js test\settings-store.test.js test\session-store.test.js test\coordinate-mapper.test.js test\input-adapter.test.js 2>&1 | Out-String
+    $testOutput = & node --test test\protocol.test.js test\settings-store.test.js test\session-store.test.js test\coordinate-mapper.test.js test\input-adapter.test.js test\rtc-room.test.js test\capture-adapter.test.js test\github-migration-contracts.test.js test\local-wifi-packaging.test.js 2>&1 | Out-String
   } catch {
     $testFailed = $true
     $testOutput = $_.Exception.Message
