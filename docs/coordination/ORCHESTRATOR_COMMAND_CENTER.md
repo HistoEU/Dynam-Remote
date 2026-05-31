@@ -145,6 +145,10 @@ Do not mark the full product launch-ready until there is evidence for:
 - Worker 5 reviewed: `docs/coordination/reviews/worker-5-ios-shell.md`.
 - Worker 2 reviewed and patched: `docs/coordination/reviews/worker-2-browser-pwa-polish.md`.
 - Worker 4 reviewed and patched: `docs/coordination/reviews/worker-4-android-shell.md`.
+- Integration rehearsal pushed: `codex/integration-reviewed-workers`.
+  - Includes Workers 2, 3, 4, and 5.
+  - One `public/app.js` conflict was resolved.
+  - `npm ci`, syntax checks, focused integration tests, fake capture probe, and full isolated screen-mode `npm test` passed in `C:\tmp\dynam-integration-reviewed`.
 - Review Worker 1 as soon as it commits/pushes because its CI/package/acceptance changes affect every later merge.
 - Watch for Worker 6 / `infra/product-remote-readiness`; no local worktree or remote branch was visible during the latest sweep.
 - Keep a separate review note for each worker under `docs/coordination/reviews/`.
