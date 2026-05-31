@@ -6,6 +6,7 @@ const { MONITORS: FAKE_MONITORS, createFakeFrame } = require("./fake-stream");
 const { makeMessage } = require("./protocol");
 
 const CAPTURE_TIMEOUT_MS = 2200;
+const DEFAULT_STALE_CAPTURE_MS = 12000;
 
 function withTimeout(promise, timeoutMs, message) {
   let timer = null;
@@ -90,6 +91,154 @@ function normalizeRememberedMonitor(display = {}) {
     orientation: width >= height ? "landscape" : "portrait",
     status: "remembered"
   };
+}
+
+function cleanString(value, fallback = "", maxLength = 120) {
+  return String(value || fallback || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function cleanNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function monitorSummary(monitor = null) {
+  if (!monitor) return null;
+  return {
+    id: cleanString(monitor.id, "", 80),
+    sourceId: cleanString(monitor.sourceId, "", 80),
+    name: cleanString(monitor.name, "Display", 80),
+    bounds: {
+      left: cleanNumber(monitor.bounds?.left),
+      top: cleanNumber(monitor.bounds?.top),
+      width: cleanNumber(monitor.bounds?.width),
+      height: cleanNumber(monitor.bounds?.height)
+    },
+    logicalBounds: monitor.logicalBounds ? {
+      left: cleanNumber(monitor.logicalBounds.left),
+      top: cleanNumber(monitor.logicalBounds.top),
+      width: cleanNumber(monitor.logicalBounds.width),
+      height: cleanNumber(monitor.logicalBounds.height)
+    } : null,
+    scaleFactor: cleanNumber(monitor.scaleFactor, 1),
+    primary: Boolean(monitor.primary),
+    orientation: cleanString(monitor.orientation, "", 32),
+    status: cleanString(monitor.status, "unknown", 40)
+  };
+}
+
+function sizeFromMonitor(monitor = null) {
+  return {
+    width: Math.max(0, cleanNumber(monitor?.bounds?.width)),
+    height: Math.max(0, cleanNumber(monitor?.bounds?.height))
+  };
+}
+
+function captureSizeMismatches(expected = {}, actual = {}) {
+  const expectedW = cleanNumber(expected.width);
+  const expectedH = cleanNumber(expected.height);
+  const actualW = cleanNumber(actual.width);
+  const actualH = cleanNumber(actual.height);
+  if (!expectedW || !expectedH || !actualW || !actualH) return false;
+  const tolerance = 10;
+  return !(Math.abs(actualW - expectedW) <= tolerance && Math.abs(actualH - expectedH) <= tolerance);
+}
+
+function findMonitor(monitors = [], monitorId = "") {
+  return monitors.find((monitor) => monitor.id === monitorId) || null;
+}
+
+function createCaptureDiagnostics({
+  monitors = [],
+  selectedMonitorId = "",
+  rtcState = {},
+  captureLaunch = {},
+  correctionCount = 0,
+  now = Date.now(),
+  staleAfterMs = DEFAULT_STALE_CAPTURE_MS
+} = {}) {
+  const safeMonitors = Array.isArray(monitors) ? monitors : [];
+  const selectedMonitor = findMonitor(safeMonitors, selectedMonitorId) || safeMonitors[0] || null;
+  const captureMeta = rtcState?.host?.capture || null;
+  const launchMonitorId = cleanString(captureLaunch.monitorId || selectedMonitorId, "", 80);
+  const reportedMonitorId = cleanString(captureMeta?.requestedMonitor || "", "", 80);
+  const reportedMonitor = findMonitor(safeMonitors, reportedMonitorId);
+  const actualSize = {
+    width: Math.max(0, cleanNumber(captureMeta?.width)),
+    height: Math.max(0, cleanNumber(captureMeta?.height))
+  };
+  const expectedSize = sizeFromMonitor(selectedMonitor);
+  const updatedAt = cleanNumber(captureMeta?.updatedAt);
+  const ageMs = updatedAt ? Math.max(0, now - updatedAt) : null;
+  const stale = Boolean(captureMeta && ageMs !== null && ageMs > staleAfterMs);
+  const autoDetect = captureLaunch.autoDetect && typeof captureLaunch.autoDetect === "object"
+    ? captureLaunch.autoDetect
+    : {};
+  const correctionStatus = cleanString(autoDetect.status, "idle", 60);
+  const divergence = [];
+
+  if (!rtcState?.hostConnected || !rtcState?.host) {
+    divergence.push("missing-rtc-host");
+  } else if (!captureMeta?.sharing) {
+    divergence.push("not-sharing");
+  }
+  if (reportedMonitorId && selectedMonitor?.id && reportedMonitorId !== selectedMonitor.id) {
+    divergence.push("requested-monitor-mismatch");
+  }
+  if (captureMeta?.sharing && captureSizeMismatches(expectedSize, actualSize)) {
+    divergence.push("capture-size-mismatch");
+  }
+  if (stale) divergence.push("stale-rtc-host");
+  if (selectedMonitor?.status && selectedMonitor.status !== "screen" && selectedMonitor.status !== "fake") {
+    divergence.push("selected-monitor-disconnected");
+  }
+
+  return {
+    selectedInputMonitor: monitorSummary(selectedMonitor),
+    requestedCapture: {
+      monitorId: launchMonitorId,
+      sourceName: cleanString(captureLaunch.captureSourceName || captureMeta?.requestedSource || "auto", "auto", 120),
+      status: cleanString(captureLaunch.status, "idle", 40),
+      autoStart: Boolean(captureLaunch.autoStart),
+      autoSelect: Boolean(captureLaunch.autoSelect),
+      lastLaunchAt: cleanNumber(captureLaunch.lastLaunchAt)
+    },
+    reportedCapture: {
+      sharing: Boolean(captureMeta?.sharing),
+      monitorId: reportedMonitorId,
+      source: cleanString(captureMeta?.reportedSource || captureMeta?.displaySurface || "unknown", "unknown", 120),
+      displaySurface: cleanString(captureMeta?.displaySurface, "", 80),
+      width: actualSize.width,
+      height: actualSize.height,
+      frameRate: cleanNumber(captureMeta?.frameRate),
+      connectionState: cleanString(captureMeta?.connectionState, "", 40),
+      iceConnectionState: cleanString(captureMeta?.iceConnectionState, "", 40),
+      firstFrameTimeMs: cleanNumber(captureMeta?.firstFrameTimeMs),
+      fallbackReason: cleanString(captureMeta?.fallbackReason, "", 160),
+      updatedAt
+    },
+    phoneVisibleDisplay: monitorSummary(reportedMonitor || selectedMonitor),
+    expectedSize,
+    actualSize,
+    correction: {
+      status: correctionStatus,
+      reason: cleanString(autoDetect.reason, "", 180),
+      checkedAt: cleanNumber(autoDetect.checkedAt),
+      count: Math.max(0, cleanNumber(correctionCount)),
+      needsManualAction: correctionStatus === "needs-manual-check"
+    },
+    staleCapture: {
+      stale,
+      ageMs,
+      updatedAt,
+      staleAfterMs
+    },
+    divergence: uniqueSorted(divergence)
+  };
+}
+
+function uniqueSorted(items = []) {
+  return [...new Set(items)].sort();
 }
 
 function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = null } = {}) {
@@ -236,4 +385,10 @@ function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = 
   };
 }
 
-module.exports = { createCaptureAdapter, qualityToIntervalMs };
+module.exports = {
+  createCaptureAdapter,
+  createCaptureDiagnostics,
+  normalizeDisplay,
+  normalizeRememberedMonitor,
+  qualityToIntervalMs
+};

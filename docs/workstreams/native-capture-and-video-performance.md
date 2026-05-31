@@ -61,6 +61,38 @@ Capture at least:
 - cursor composition status
 - rough latency compared with browser capture
 
+## Worker 3 Spike Output
+
+Spike folder:
+
+- `native-capture-spike/README.md`
+
+Benchmark/probe script:
+
+- `benchmarks/capture-performance-probe.js`
+
+The probe measures the current Node capture adapter without writing raw frames. It reports FPS, average and p95 frame time, CPU process time, memory, monitor identity stability, source mode, cursor-composition status, GPU blocker, and fallback behavior.
+
+Local short probe evidence from this branch:
+
+- command: `node benchmarks\capture-performance-probe.js --samples=5 --mode=screen`
+- observed mode: `screen`
+- monitor count: `3`
+- capture FPS: `12.72`
+- average frame time: `78.62ms`
+- p95 frame time: `80.9ms`
+- raw frames written: `false`
+
+Current recommendation: keep browser/WebRTC and screenshot fallback intact. For the paid high-speed product, build the next native proof around Windows Graphics Capture first, with Desktop Duplication as the comparison path, then add hardware encode through Media Foundation or GPU-specific encoders only after stable monitor identity and cursor composition are measured.
+
+Unmeasured in this branch:
+
+- real GPU utilization
+- native cursor composition
+- hardware encode latency
+- physical phone end-to-end latency
+- browser source picker correctness on real multi-monitor hardware
+
 ## Validation
 
 Minimum evidence:
@@ -73,4 +105,3 @@ Minimum evidence:
 ## Done Means
 
 The team knows the next technical step toward truly smooth paid remote video.
-

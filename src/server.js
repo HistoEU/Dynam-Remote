@@ -7,7 +7,7 @@ const crypto = require("node:crypto");
 const { spawn, spawnSync } = require("node:child_process");
 const QRCode = require("qrcode");
 
-const { createCaptureAdapter } = require("./capture-adapter");
+const { createCaptureAdapter, createCaptureDiagnostics } = require("./capture-adapter");
 const { createInputAdapter } = require("./input-adapter");
 const { getNetworkRisk, getNetworkValidation, getReachableAddresses, isAllowedRemoteAddress } = require("./network");
 const { makeError, makeMessage, nextActionForCode, validateClientMessage } = require("./protocol");
@@ -351,9 +351,34 @@ async function refreshMonitorList(reason = "refresh") {
   return false;
 }
 
+function publicCaptureDiagnosticLaunchState() {
+  return {
+    status: captureLaunchState.status,
+    lastLaunchAt: captureLaunchState.lastLaunchAt,
+    autoStart: captureLaunchState.autoStart,
+    autoSelect: captureLaunchState.autoSelect,
+    monitorId: captureLaunchState.monitorId,
+    captureSourceName: captureLaunchState.captureSourceName,
+    autoDetect: captureLaunchState.autoDetect
+  };
+}
+
+function currentCaptureDiagnostics(monitors, rtcStatus) {
+  return createCaptureDiagnostics({
+    monitors,
+    selectedMonitorId,
+    rtcState: rtcStatus,
+    captureLaunch: publicCaptureDiagnosticLaunchState(),
+    correctionCount: captureSourceCorrectionCounts.get(selectedMonitorId) || 0,
+    now: Date.now(),
+    staleAfterMs: RTC_CAPTURE_STALE_MS
+  });
+}
+
 function getPublicState() {
   const monitors = capture.getMonitors();
   const addresses = getReachableAddresses(PORT, { publicUrl });
+  const rtcStatus = rtcRoom ? rtcRoom.getState() : { available: false, state: "unavailable" };
   return {
     app: {
       name: "Remote Controller",
@@ -384,7 +409,8 @@ function getPublicState() {
       visibleClients: visibleClientCount(),
       hiddenClients: hiddenClientCount()
     },
-    rtcStatus: rtcRoom ? rtcRoom.getState() : { available: false, state: "unavailable" },
+    rtcStatus,
+    captureDiagnostics: currentCaptureDiagnostics(monitors, rtcStatus),
     inputMode,
     settings: publicSettings(),
     inputSafety: {
@@ -679,9 +705,10 @@ function markCaptureLaunch(result = {}) {
 function markCaptureAlive(peer = null) {
   captureLaunchState.status = "alive";
   captureLaunchState.lastLaunchAt = Date.now();
+  const captureMeta = peer?.metadata?.capture || peer?.capture || {};
   if (peer?.metadata?.captureUrl) captureLaunchState.captureUrl = peer.metadata.captureUrl;
-  if (peer?.metadata?.capture?.requestedMonitor) captureLaunchState.monitorId = peer.metadata.capture.requestedMonitor;
-  if (peer?.metadata?.capture?.requestedSource) captureLaunchState.captureSourceName = peer.metadata.capture.requestedSource;
+  if (captureMeta.requestedMonitor) captureLaunchState.monitorId = captureMeta.requestedMonitor;
+  if (captureMeta.requestedSource) captureLaunchState.captureSourceName = captureMeta.requestedSource;
 }
 
 function markCaptureIdle(reason = "idle") {
@@ -765,8 +792,8 @@ function maybeCorrectCaptureSource(reason = "capture-check", rtcState = rtcRoom?
   const wrongSize = captureSizeMismatch(meta, monitor);
   if (!wrongRequestedMonitor) {
     captureSourceCorrectionCounts.set(selectedMonitorId, 0);
-    noteCaptureAutoDetect(wrongSize === true ? "locked" : "matched", wrongSize === true
-      ? `Capture source is locked for ${selectedMonitorId}; not cycling away automatically.`
+    noteCaptureAutoDetect(wrongSize === true ? "size-mismatch" : "matched", wrongSize === true
+      ? `Capture size ${meta.width}x${meta.height} does not match ${selectedMonitorId}; use the capture source controls if the phone shows the wrong display.`
       : `Capture matches ${selectedMonitorId}.`);
     return false;
   }
