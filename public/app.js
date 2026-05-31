@@ -4274,7 +4274,7 @@ if ("serviceWorker" in navigator) {
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v68-reloaded";
+        const reloadKey = "remote-controller-shell-v77-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();
