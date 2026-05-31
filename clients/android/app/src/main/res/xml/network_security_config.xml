@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Current free local Wi-Fi hosts are served over user-entered http:// LAN/Tailscale URLs. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
