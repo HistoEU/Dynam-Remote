@@ -230,7 +230,7 @@ pre {
   display: block;
   width: 100vw;
   height: 100svh;
-  background: #030302;
+  background: #000;
   overflow: hidden;
 }
 
@@ -246,14 +246,14 @@ pre {
 
 #streamCanvas {
   z-index: 2;
-  background: #030302;
+  background: #000;
 }
 
 .rtc-video {
   z-index: 1;
   display: none;
   object-fit: contain;
-  background: #030302;
+  background: #000;
 }
 
 .controller.rtc-active .rtc-video {

@@ -31,7 +31,9 @@ These gates come from the 15-page build plan. Do not mark the build complete unt
 - Live smoke proves critical command acknowledgements echo the original sequence for monitor selection, stream quality, and phone visibility updates.
 - Browser input test proves rapid pointer moves are coalesced while critical click/key/drag ordering is preserved.
 - Browser input test proves Precision mode lowers effective movement sensitivity, marks the Precision button active, and shows the touch halo.
-- Browser input test proves a zoomed viewport maps direct-touch coordinates through the visible crop and exposes Zoom/Reset controls in Settings.
+- Browser input test proves the phone display stage renders over black, can be pushed partly off the phone viewport with two fingers, and does not send laptop cursor input while panning the stage.
+- Browser input test proves a zoomed viewport maps direct-touch coordinates through the visible transformed stage and exposes Zoom/Reset controls in Settings.
+- Browser input test proves deep focal zoom keeps the touched stage point anchored and allows practical inspection beyond the old conservative zoom limit.
 - Browser input test proves zoomed edge-pan changes the phone viewport locally without sending laptop cursor input.
 - Browser settings test proves scroll speed, touch halo visibility, and haptic feedback toggles update local phone state and persist locally.
 - Browser visibility test proves the phone reports visible/hidden page state to the host.
@@ -128,7 +130,7 @@ npm run acceptance:phone -- -Gate same-wifi
 - Move/drag on the phone and confirm diagnostics enter a responsive state, then settle after idle.
 - Lock the phone or switch away from the PWA, then confirm host diagnostics enter hidden-stream mode; reopen the PWA and confirm frames resume.
 - Turn on Precision and confirm tiny movements are easier for small targets, text caret placement, window edges, and narrow scrollbars; confirm the touch halo is visible but does not cover the bottom controls.
-- Use the Zoom slider and pinch zoom, then pan the zoomed stream with two fingers and confirm direct taps land on the visible desktop area rather than the unzoomed full monitor.
+- Use the Zoom slider and pinch zoom, then pan the stream with two fingers in all directions. Confirm part of the remote screen can leave the phone viewport, the exposed area is black, no gray/white/debug border appears, and direct taps land on the visible transformed desktop area rather than the unzoomed full monitor.
 - While zoomed in touchpad mode, drag from a stream edge and confirm the viewport pans locally without moving the laptop cursor.
 - Adjust Scroll speed and confirm two-finger scrolling can be slowed down and sped up; toggle Touch halo and Haptic feedback to confirm the phone honors both preferences.
 - Complete every proof checklist item in Settings, then tap Mark Proof from the controller proof banner or Settings and confirm the post-run host logs contain `acceptance.phoneMark`.
@@ -208,7 +210,7 @@ npm run acceptance:stop -- -Gate tailscale
 - Hidden phone clients keep receiving full-rate capture frames instead of pausing, or a visible phone fails to resume frames after returning to the PWA.
 - Service worker caches `/host?key=...`, host-console assets, API responses, WebSockets, or other query-string requests.
 - Precision mode does not visibly reduce movement sensitivity, the active Precision state is unclear, or the touch halo is hidden/confusing on the phone viewport.
-- Zoomed direct touch uses unzoomed coordinates, two-finger pan sends unintended laptop input while zoomed, or Reset View does not return the stream to 100%.
+- Zoomed direct touch uses unzoomed coordinates, two-finger display-stage pan sends unintended laptop input, exposed offscreen areas are not black, or Reset View does not return the stream to 100%.
 - Zoomed edge-pan sends `pointer.move` input to the laptop or fails to move the visible phone viewport.
 - Scroll speed does not affect phone scrolling, disabled Touch halo still appears, or disabled Haptic feedback still vibrates the phone.
 - Auto-start launches the host without the tray safety menu or starts with real input already enabled.

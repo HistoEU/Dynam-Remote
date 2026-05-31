@@ -35,6 +35,10 @@ const CURSOR_LENS_VIEWPORT_W = 0.72;
 const CURSOR_LENS_VIEWPORT_H = 0.78;
 const CURSOR_LENS_MARGIN = 6;
 const CURSOR_LENS_HOLD_MS = 520;
+const DISPLAY_STAGE_MAX_ZOOM = 5;
+const DISPLAY_STAGE_MIN_VISIBLE_RATIO = 0.12;
+const DISPLAY_STAGE_MIN_VISIBLE_PX = 32;
+const DISPLAY_STAGE_MAX_VISIBLE_PX = 160;
 const CALIBRATION_STORAGE_KEY = "remote-monitor-calibrations";
 const CALIBRATION_TARGETS = [
   { id: "top-left", label: "Top left", x: 0.04, y: 0.06 },
@@ -126,6 +130,8 @@ const state = {
   viewportZoom: 1,
   viewportPanX: 0,
   viewportPanY: 0,
+  stagePanX: 0,
+  stagePanY: 0,
   autoFollowCursor: localStorage.getItem("remote-auto-follow-cursor") !== "0",
   cursorLensEnabled: localStorage.getItem("remote-cursor-lens") !== "0",
   cursorLensHold: localStorage.getItem("remote-cursor-lens-hold") === "1",
@@ -1382,6 +1388,8 @@ function resetMonitorViewState({ clearFrame = false } = {}) {
   state.viewportZoom = 1;
   state.viewportPanX = 0;
   state.viewportPanY = 0;
+  state.stagePanX = 0;
+  state.stagePanY = 0;
   state.followPausedUntil = 0;
   state.lastCursorMap = null;
   state.lastCursorLensBox = null;
@@ -1400,6 +1408,7 @@ function resetMonitorViewState({ clearFrame = false } = {}) {
     releaseFrameImages();
   }
   updateZoomUi();
+  updateRtcVideoViewport();
   updateCalibrationUi();
 }
 
@@ -1809,6 +1818,8 @@ function sourceMetrics(sourceW, sourceH, rect = el.canvas.getBoundingClientRect(
     sourceH,
     drawW,
     drawH,
+    stageW: rect.width,
+    stageH: rect.height,
     dx: (rect.width - drawW) / 2,
     dy: portrait ? 0 : (rect.height - drawH) / 2
   };
@@ -1955,15 +1966,71 @@ function activeDisplayCursor(frame = state.frame) {
   return recentAckCursor(frame) || frame?.cursor || null;
 }
 
-function clampViewportPan() {
-  const visible = 1 / state.viewportZoom;
-  const maxPan = Math.max(0, 1 - visible);
-  state.viewportPanX = clamp(state.viewportPanX, 0, maxPan);
-  state.viewportPanY = clamp(state.viewportPanY, 0, maxPan);
+function stageMetricsFromBase(baseMetrics) {
+  const zoom = Math.max(1, Number(state.viewportZoom) || 1);
+  return {
+    ...baseMetrics,
+    baseDx: baseMetrics.dx,
+    baseDy: baseMetrics.dy,
+    baseDrawW: baseMetrics.drawW,
+    baseDrawH: baseMetrics.drawH,
+    scale: zoom,
+    stagePanX: state.stagePanX,
+    stagePanY: state.stagePanY,
+    dx: baseMetrics.dx + state.stagePanX,
+    dy: baseMetrics.dy + state.stagePanY,
+    drawW: baseMetrics.drawW * zoom,
+    drawH: baseMetrics.drawH * zoom
+  };
+}
+
+function displayStageMetrics(frame = state.frame, rect = el.canvas.getBoundingClientRect()) {
+  return stageMetricsFromBase(frameMetrics(frame, rect));
+}
+
+function displayStageMetricsForSource(sourceW, sourceH, rect = el.canvas.getBoundingClientRect()) {
+  return stageMetricsFromBase(sourceMetrics(sourceW, sourceH, rect));
+}
+
+function stagePanLimits(baseMetrics = frameMetrics()) {
+  const zoom = Math.max(1, Number(state.viewportZoom) || 1);
+  const stageW = Math.max(1, Number(baseMetrics.stageW || 1));
+  const stageH = Math.max(1, Number(baseMetrics.stageH || 1));
+  const screenW = Math.max(1, Number(baseMetrics.drawW || 1) * zoom);
+  const screenH = Math.max(1, Number(baseMetrics.drawH || 1) * zoom);
+  const minVisibleX = Math.min(
+    DISPLAY_STAGE_MAX_VISIBLE_PX,
+    Math.max(DISPLAY_STAGE_MIN_VISIBLE_PX, Math.min(stageW, screenW) * DISPLAY_STAGE_MIN_VISIBLE_RATIO)
+  );
+  const minVisibleY = Math.min(
+    DISPLAY_STAGE_MAX_VISIBLE_PX,
+    Math.max(DISPLAY_STAGE_MIN_VISIBLE_PX, Math.min(stageH, screenH) * DISPLAY_STAGE_MIN_VISIBLE_RATIO)
+  );
+  return {
+    minX: minVisibleX - baseMetrics.dx - screenW,
+    maxX: stageW - minVisibleX - baseMetrics.dx,
+    minY: minVisibleY - baseMetrics.dy - screenH,
+    maxY: stageH - minVisibleY - baseMetrics.dy
+  };
+}
+
+function syncViewportPanFromStage(baseMetrics = frameMetrics()) {
+  const zoom = Math.max(1, Number(state.viewportZoom) || 1);
+  const panX = -state.stagePanX / Math.max(1, Number(baseMetrics.drawW || 1) * zoom);
+  const panY = -state.stagePanY / Math.max(1, Number(baseMetrics.drawH || 1) * zoom);
+  state.viewportPanX = Math.abs(panX) < 0.000001 ? 0 : panX;
+  state.viewportPanY = Math.abs(panY) < 0.000001 ? 0 : panY;
+}
+
+function clampStagePan(baseMetrics = frameMetrics()) {
+  const limits = stagePanLimits(baseMetrics);
+  state.stagePanX = clamp(Number(state.stagePanX) || 0, limits.minX, limits.maxX);
+  state.stagePanY = clamp(Number(state.stagePanY) || 0, limits.minY, limits.maxY);
+  syncViewportPanFromStage(baseMetrics);
 }
 
 function updateZoomUi() {
-  state.cursorLensZoom = clamp(Number(state.cursorLensZoom) || 1.7, 1.15, 3);
+  state.cursorLensZoom = clamp(Number(state.cursorLensZoom) || 1.7, 1.15, DISPLAY_STAGE_MAX_ZOOM);
   state.cursorLensSize = clamp(Number(state.cursorLensSize) || 1, 0.65, 1.35);
   if (el.zoomRange) el.zoomRange.value = String(state.viewportZoom);
   if (el.zoomValue) el.zoomValue.textContent = `${Math.round(state.viewportZoom * 100)}%`;
@@ -1977,18 +2044,17 @@ function updateZoomUi() {
 function setViewportZoom(value, options = {}) {
   const focal = options.focalCanvasPoint || null;
   const beforeFocus = focal ? normalizeCanvasPoint(focal) : null;
-  const metrics = focal ? frameMetrics() : null;
-  state.viewportZoom = clamp(Number(value) || 1, 1, 3);
+  const metrics = frameMetrics();
+  state.viewportZoom = clamp(Number(value) || 1, 1, DISPLAY_STAGE_MAX_ZOOM);
   if (state.viewportZoom <= 1.01) {
     state.viewportZoom = 1;
-    state.viewportPanX = 0;
-    state.viewportPanY = 0;
+    if (!options.preservePanAtMin) {
+      state.stagePanX = 0;
+      state.stagePanY = 0;
+    }
   } else if (beforeFocus && metrics) {
-    const visible = 1 / state.viewportZoom;
-    const localX = clamp((focal.x - metrics.dx) / Math.max(1, metrics.drawW), 0, 1);
-    const localY = clamp((focal.y - metrics.dy) / Math.max(1, metrics.drawH), 0, 1);
-    state.viewportPanX = beforeFocus.normalizedX - localX * visible;
-    state.viewportPanY = beforeFocus.normalizedY - localY * visible;
+    state.stagePanX = focal.x - metrics.dx - beforeFocus.normalizedX * metrics.drawW * state.viewportZoom;
+    state.stagePanY = focal.y - metrics.dy - beforeFocus.normalizedY * metrics.drawH * state.viewportZoom;
     if (options.pauseFollow !== false) {
       state.followPausedUntil = performance.now() + 650;
     }
@@ -1997,29 +2063,42 @@ function setViewportZoom(value, options = {}) {
   } else {
     state.followPausedUntil = performance.now() + 650;
   }
-  clampViewportPan();
+  clampStagePan(metrics);
   updateZoomUi();
   updateRtcVideoViewport();
   drawFrame();
   updateDiagnostics();
 }
 
-function setViewportPan(panX, panY) {
-  state.viewportPanX = Number(panX) || 0;
-  state.viewportPanY = Number(panY) || 0;
-  clampViewportPan();
+function setViewportPan(panX, panY, options = {}) {
+  const metrics = frameMetrics();
+  const zoom = Math.max(1, Number(state.viewportZoom) || 1);
+  if (options.units === "stage") {
+    state.stagePanX = Number(panX) || 0;
+    state.stagePanY = Number(panY) || 0;
+  } else {
+    state.viewportPanX = Number(panX) || 0;
+    state.viewportPanY = Number(panY) || 0;
+    state.stagePanX = -state.viewportPanX * Math.max(1, metrics.drawW * zoom);
+    state.stagePanY = -state.viewportPanY * Math.max(1, metrics.drawH * zoom);
+  }
+  clampStagePan(metrics);
   updateRtcVideoViewport();
   drawFrame();
   updateDiagnostics();
 }
 
+function setStagePan(panX, panY) {
+  return setViewportPan(panX, panY, { units: "stage" });
+}
+
 function panViewportByCanvasDelta(deltaX, deltaY) {
-  if (state.viewportZoom <= 1) return;
   state.followPausedUntil = performance.now() + 650;
   const metrics = frameMetrics();
-  state.viewportPanX -= deltaX / Math.max(1, metrics.drawW * state.viewportZoom);
-  state.viewportPanY -= deltaY / Math.max(1, metrics.drawH * state.viewportZoom);
-  clampViewportPan();
+  state.stagePanX += Number(deltaX) || 0;
+  state.stagePanY += Number(deltaY) || 0;
+  clampStagePan(metrics);
+  updateRtcVideoViewport();
   drawFrame();
 }
 
@@ -2043,6 +2122,8 @@ function resetViewport() {
   state.viewportZoom = 1;
   state.viewportPanX = 0;
   state.viewportPanY = 0;
+  state.stagePanX = 0;
+  state.stagePanY = 0;
   updateZoomUi();
   updateRtcVideoViewport();
   drawFrame();
@@ -2082,7 +2163,7 @@ function setCursorLensHold(enabled) {
 }
 
 function setCursorLensZoom(value) {
-  state.cursorLensZoom = clamp(Number(value) || 1.7, 1.15, 3);
+  state.cursorLensZoom = clamp(Number(value) || 1.7, 1.15, DISPLAY_STAGE_MAX_ZOOM);
   localStorage.setItem("remote-cursor-lens-zoom", String(state.cursorLensZoom));
   updateZoomUi();
   drawFrame();
@@ -2098,12 +2179,18 @@ function setCursorLensSize(value) {
 }
 
 function viewportCrop(sourceW, sourceH) {
-  const visible = 1 / state.viewportZoom;
+  const metrics = displayStageMetricsForSource(sourceW, sourceH);
+  const visibleLeft = Math.max(0, -metrics.dx);
+  const visibleTop = Math.max(0, -metrics.dy);
+  const visibleRight = Math.min(metrics.drawW, metrics.stageW - metrics.dx);
+  const visibleBottom = Math.min(metrics.drawH, metrics.stageH - metrics.dy);
+  const visibleW = Math.max(0, visibleRight - visibleLeft);
+  const visibleH = Math.max(0, visibleBottom - visibleTop);
   return {
-    sx: state.viewportPanX * sourceW,
-    sy: state.viewportPanY * sourceH,
-    sw: sourceW * visible,
-    sh: sourceH * visible
+    sx: clamp((visibleLeft / Math.max(1, metrics.drawW)) * sourceW, 0, sourceW),
+    sy: clamp((visibleTop / Math.max(1, metrics.drawH)) * sourceH, 0, sourceH),
+    sw: clamp((visibleW / Math.max(1, metrics.drawW)) * sourceW, 0, sourceW),
+    sh: clamp((visibleH / Math.max(1, metrics.drawH)) * sourceH, 0, sourceH)
   };
 }
 
@@ -2121,23 +2208,26 @@ function updateRtcVideoViewport() {
   const frame = rtcVideoFrame();
   const sourceW = Math.max(1, Number(state.rtcVideoWidth || frame?.width || selectedMonitor()?.bounds?.width || 1280));
   const sourceH = Math.max(1, Number(state.rtcVideoHeight || frame?.height || selectedMonitor()?.bounds?.height || 720));
-  const metrics = sourceMetrics(sourceW, sourceH, rect);
-  const zoom = Math.max(1, Number(state.viewportZoom) || 1);
+  clampStagePan(sourceMetrics(sourceW, sourceH, rect));
+  const metrics = displayStageMetricsForSource(sourceW, sourceH, rect);
   el.rtcVideo.style.inset = "auto";
-  el.rtcVideo.style.left = `${metrics.dx - state.viewportPanX * metrics.drawW * zoom}px`;
-  el.rtcVideo.style.top = `${metrics.dy - state.viewportPanY * metrics.drawH * zoom}px`;
-  el.rtcVideo.style.width = `${metrics.drawW * zoom}px`;
-  el.rtcVideo.style.height = `${metrics.drawH * zoom}px`;
+  el.rtcVideo.style.left = `${metrics.dx}px`;
+  el.rtcVideo.style.top = `${metrics.dy}px`;
+  el.rtcVideo.style.width = `${metrics.drawW}px`;
+  el.rtcVideo.style.height = `${metrics.drawH}px`;
 }
 
 function normalizeCanvasPoint(point) {
-  const metrics = frameMetrics();
-  const visible = 1 / state.viewportZoom;
-  const localX = clamp((point.x - metrics.dx) / Math.max(1, metrics.drawW), 0, 1);
-  const localY = clamp((point.y - metrics.dy) / Math.max(1, metrics.drawH), 0, 1);
+  const metrics = displayStageMetrics();
+  const rawX = (point.x - metrics.dx) / Math.max(1, metrics.drawW);
+  const rawY = (point.y - metrics.dy) / Math.max(1, metrics.drawH);
+  const insideStage = rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1;
   return {
-    normalizedX: clamp(state.viewportPanX + localX * visible, 0, 1),
-    normalizedY: clamp(state.viewportPanY + localY * visible, 0, 1)
+    normalizedX: clamp(rawX, 0, 1),
+    normalizedY: clamp(rawY, 0, 1),
+    rawNormalizedX: rawX,
+    rawNormalizedY: rawY,
+    insideStage
   };
 }
 
@@ -2160,19 +2250,23 @@ function followViewportTowardCursor({ force = false, strength = 0.55, skipDraw =
   if (!force && performance.now() < state.followPausedUntil) return false;
   const cursor = remoteCursorNormalized();
   if (!cursor) return false;
+  const metrics = frameMetrics();
   const visible = 1 / state.viewportZoom;
   const maxPan = Math.max(0, 1 - visible);
-  let nextX = state.viewportPanX;
-  let nextY = state.viewportPanY;
-  const targetX = clamp(cursor.x - visible / 2, 0, maxPan);
-  const targetY = clamp(cursor.y - visible / 2, 0, maxPan);
+  let nextX = state.stagePanX;
+  let nextY = state.stagePanY;
+  const targetPanX = clamp(cursor.x - visible / 2, 0, maxPan);
+  const targetPanY = clamp(cursor.y - visible / 2, 0, maxPan);
+  const targetX = -targetPanX * metrics.drawW * state.viewportZoom;
+  const targetY = -targetPanY * metrics.drawH * state.viewportZoom;
   const followStrength = force ? 1 : clamp(Number(strength) || 1, 0, 1);
-  nextX = state.viewportPanX + (targetX - state.viewportPanX) * followStrength;
-  nextY = state.viewportPanY + (targetY - state.viewportPanY) * followStrength;
-  if (Math.abs(nextX - state.viewportPanX) < 0.0005 && Math.abs(nextY - state.viewportPanY) < 0.0005) return false;
-  state.viewportPanX = nextX;
-  state.viewportPanY = nextY;
-  clampViewportPan();
+  nextX = state.stagePanX + (targetX - state.stagePanX) * followStrength;
+  nextY = state.stagePanY + (targetY - state.stagePanY) * followStrength;
+  if (Math.abs(nextX - state.stagePanX) < 0.5 && Math.abs(nextY - state.stagePanY) < 0.5) return false;
+  state.stagePanX = nextX;
+  state.stagePanY = nextY;
+  clampStagePan(metrics);
+  updateRtcVideoViewport();
   if (!skipDraw) drawFrame();
   return true;
 }
@@ -2222,17 +2316,16 @@ function updateRemoteCursorFromAck(ack = {}) {
 function cursorCanvasPoint(frame, metrics, sourceW, sourceH) {
   const cursor = activeDisplayCursor(frame);
   if (!cursor || cursor.visible === false) return null;
-  const crop = viewportCrop(sourceW, sourceH);
   const cursorX = Number(cursor.x);
   const cursorY = Number(cursor.y);
   if (!Number.isFinite(cursorX) || !Number.isFinite(cursorY)) return null;
-  if (cursorX < crop.sx || cursorY < crop.sy || cursorX > crop.sx + crop.sw || cursorY > crop.sy + crop.sh) return null;
+  if (cursorX < 0 || cursorY < 0 || cursorX > sourceW || cursorY > sourceH) return null;
   return {
-    x: metrics.dx + ((cursorX - crop.sx) / Math.max(1, crop.sw)) * metrics.drawW,
-    y: metrics.dy + ((cursorY - crop.sy) / Math.max(1, crop.sh)) * metrics.drawH,
+    x: metrics.dx + (cursorX / Math.max(1, sourceW)) * metrics.drawW,
+    y: metrics.dy + (cursorY / Math.max(1, sourceH)) * metrics.drawH,
     sourceX: cursorX,
     sourceY: cursorY,
-    crop
+    crop: viewportCrop(sourceW, sourceH)
   };
 }
 
@@ -2304,8 +2397,10 @@ function drawCursorLens(frame, metrics, sourceW, sourceH, sourceElement = state.
   }
   const imageW = sourceElement.videoWidth || sourceElement.naturalWidth || sourceElement.width || sourceW;
   const imageH = sourceElement.videoHeight || sourceElement.naturalHeight || sourceElement.height || sourceH;
-  const maxLensW = Math.max(1, metrics.drawW - CURSOR_LENS_MARGIN * 2);
-  const maxLensH = Math.max(1, metrics.drawH * CURSOR_LENS_VIEWPORT_H);
+  const viewportW = Math.max(1, Number(metrics.stageW || metrics.drawW || 1));
+  const viewportH = Math.max(1, Number(metrics.stageH || metrics.drawH || 1));
+  const maxLensW = Math.max(1, Math.min(metrics.drawW, viewportW) - CURSOR_LENS_MARGIN * 2);
+  const maxLensH = Math.max(1, Math.min(metrics.drawH, viewportH) * CURSOR_LENS_VIEWPORT_H);
   const lensSize = clamp(Number(state.cursorLensSize) || 1, 0.65, 1.35);
   const lensZoom = clamp(Number(state.cursorLensZoom) || 1.7, 1.15, 3);
   let lensW = Math.min(
@@ -2321,15 +2416,19 @@ function drawCursorLens(frame, metrics, sourceW, sourceH, sourceElement = state.
   const lensAspect = lensH / Math.max(1, lensW);
   const sourceLensW = Math.min(sourceW, Math.max(120, sourceW * 0.22 / lensZoom));
   const sourceLensH = Math.min(sourceH, Math.max(132, sourceLensW * lensAspect));
+  const minLensX = CURSOR_LENS_MARGIN;
+  const maxLensX = Math.max(minLensX, viewportW - lensW - CURSOR_LENS_MARGIN);
+  const minLensY = CURSOR_LENS_MARGIN;
+  const maxLensY = Math.max(minLensY, viewportH - lensH - CURSOR_LENS_MARGIN);
   const dx = clamp(
     point.x - lensW / 2,
-    metrics.dx + CURSOR_LENS_MARGIN,
-    metrics.dx + metrics.drawW - lensW - CURSOR_LENS_MARGIN
+    minLensX,
+    maxLensX
   );
   const dy = clamp(
     point.y - lensH / 2,
-    metrics.dy + CURSOR_LENS_MARGIN,
-    metrics.dy + metrics.drawH - lensH - CURSOR_LENS_MARGIN
+    minLensY,
+    maxLensY
   );
 
   const dotX = dx + lensW / 2;
@@ -2501,19 +2600,13 @@ function drawScreenFrame(frame, w, h) {
     if (state.autoFollowCursor && state.viewportZoom > 1.01) {
       forceViewportCenterOnCursor({ skipDraw: true });
     }
-    const metrics = frameMetrics(frame, { width: w, height: h });
-    const crop = viewportCrop(sourceW, sourceH);
+    const baseMetrics = frameMetrics(frame, { width: w, height: h });
+    clampStagePan(baseMetrics);
+    const metrics = displayStageMetrics(frame, { width: w, height: h });
     try {
-      ctx.fillStyle = "#030706";
-      if (metrics.dx > 0) {
-        ctx.fillRect(0, 0, metrics.dx, h);
-        ctx.fillRect(metrics.dx + metrics.drawW, 0, Math.max(0, w - metrics.dx - metrics.drawW), h);
-      }
-      if (metrics.dy > 0) {
-        ctx.fillRect(0, 0, w, metrics.dy);
-        ctx.fillRect(0, metrics.dy + metrics.drawH, w, Math.max(0, h - metrics.dy - metrics.drawH));
-      }
-      ctx.drawImage(state.frameImage, crop.sx, crop.sy, crop.sw, crop.sh, metrics.dx, metrics.dy, metrics.drawW, metrics.drawH);
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(state.frameImage, 0, 0, sourceW, sourceH, metrics.dx, metrics.dy, metrics.drawW, metrics.drawH);
     } catch (error) {
       state.frameImageReady = Boolean(state.frameImage && (state.frameImage.naturalWidth || state.frameImage.width));
       state.frameDecodeRecoveries += 1;
@@ -2529,15 +2622,12 @@ function drawScreenFrame(frame, w, h) {
     const lensDrawn = drawCursorLens(frame, metrics, sourceW, sourceH);
     if (!lensDrawn) drawRemoteCursor(frame, metrics, sourceW, sourceH);
     drawCalibrationOverlay(metrics);
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(metrics.dx, metrics.dy, metrics.drawW, metrics.drawH);
   } else {
     if (state.lastDecodedFrameAt || state.frameImage) {
       kickBlankCanvasStream("canvas-awaiting-next-decode");
       return;
     }
-    ctx.fillStyle = "#0f1c1d";
+    ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = "#d7eded";
     ctx.font = "16px Segoe UI";
@@ -2558,7 +2648,9 @@ function drawRtcOverlay(frame, w, h) {
     forceViewportCenterOnCursor({ skipDraw: true });
     updateRtcVideoViewport();
   }
-  const metrics = sourceMetrics(sourceW, sourceH, { width: w, height: h });
+  const baseMetrics = sourceMetrics(sourceW, sourceH, { width: w, height: h });
+  clampStagePan(baseMetrics);
+  const metrics = displayStageMetricsForSource(sourceW, sourceH, { width: w, height: h });
   if (frame) {
     const lensDrawn = drawCursorLens(frame, metrics, sourceW, sourceH, el.rtcVideo);
     if (!lensDrawn) drawRemoteCursor(frame, metrics, sourceW, sourceH);
@@ -2585,7 +2677,7 @@ function drawFrame() {
     return;
   }
   if (!frame) {
-    ctx.fillStyle = "#030706";
+    ctx.fillStyle = "#000000";
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = "#f1d36b";
     ctx.font = "15px Segoe UI";
@@ -2599,32 +2691,30 @@ function drawFrame() {
     return;
   }
 
-  const gradient = ctx.createLinearGradient(0, 0, w, h);
-  gradient.addColorStop(0, "#071527");
-  gradient.addColorStop(1, "#122b2d");
-  ctx.fillStyle = gradient;
+  ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = "#28494d";
   ctx.lineWidth = 1;
-  const metrics = frameMetrics(frame, { width: w, height: h });
-  const crop = viewportCrop(frame.width, frame.height);
-  const sx = metrics.drawW / crop.sw;
-  const sy = metrics.drawH / crop.sh;
-  const mapX = (value) => metrics.dx + (value - crop.sx) * sx;
-  const mapY = (value) => metrics.dy + (value - crop.sy) * sy;
+  const baseMetrics = frameMetrics(frame, { width: w, height: h });
+  clampStagePan(baseMetrics);
+  const metrics = displayStageMetrics(frame, { width: w, height: h });
+  const sx = metrics.drawW / Math.max(1, frame.width);
+  const sy = metrics.drawH / Math.max(1, frame.height);
+  const mapX = (value) => metrics.dx + value * sx;
+  const mapY = (value) => metrics.dy + value * sy;
   ctx.save();
   ctx.beginPath();
   ctx.rect(metrics.dx, metrics.dy, metrics.drawW, metrics.drawH);
   ctx.clip();
   ctx.fillStyle = "#090704";
   ctx.fillRect(metrics.dx, metrics.dy, metrics.drawW, metrics.drawH);
-  for (let x = Math.floor(crop.sx / 48) * 48; x < crop.sx + crop.sw; x += 48) {
+  for (let x = 0; x <= frame.width; x += 48) {
     ctx.beginPath();
     ctx.moveTo(mapX(x), metrics.dy);
     ctx.lineTo(mapX(x), metrics.dy + metrics.drawH);
     ctx.stroke();
   }
-  for (let y = Math.floor(crop.sy / 48) * 48; y < crop.sy + crop.sh; y += 48) {
+  for (let y = 0; y <= frame.height; y += 48) {
     ctx.beginPath();
     ctx.moveTo(metrics.dx, mapY(y));
     ctx.lineTo(metrics.dx + metrics.drawW, mapY(y));
@@ -2654,16 +2744,7 @@ function drawFrame() {
     ctx.stroke();
   }
   ctx.restore();
-  ctx.strokeStyle = "rgba(255,255,255,0.22)";
-  ctx.strokeRect(metrics.dx, metrics.dy, metrics.drawW, metrics.drawH);
   drawCalibrationOverlay(metrics);
-  if (state.viewportZoom > 1) {
-    ctx.fillStyle = "rgba(3, 7, 6, 0.76)";
-    ctx.fillRect(metrics.dx + 10, metrics.dy + 10, 88, 28);
-    ctx.fillStyle = "#f1d36b";
-    ctx.font = "13px Segoe UI";
-    ctx.fillText(`${Math.round(state.viewportZoom * 100)}% view`, metrics.dx + 20, metrics.dy + 29);
-  }
   el.latencyChip.textContent = `${Math.max(0, state.latency)} ms`;
 }
 
@@ -2760,6 +2841,8 @@ function setAutoFollowCursor(enabled, options = {}) {
     state.viewportZoom = 1;
     state.viewportPanX = 0;
     state.viewportPanY = 0;
+    state.stagePanX = 0;
+    state.stagePanY = 0;
     state.cursorLensEnabled = false;
     state.lastCursorLensBox = null;
     localStorage.setItem("remote-cursor-lens", "0");
@@ -2789,6 +2872,8 @@ function setZoomModeActive(enabled) {
     state.viewportZoom = 1;
     state.viewportPanX = 0;
     state.viewportPanY = 0;
+    state.stagePanX = 0;
+    state.stagePanY = 0;
     state.lastCursorLensBox = null;
     localStorage.setItem("remote-auto-follow-cursor", "0");
     localStorage.setItem("remote-cursor-lens", "0");
@@ -3511,7 +3596,7 @@ function bindPointer() {
       }
       const pinchDistance = Math.max(1, twoPointerDistance());
       const zoomCandidate = state.pinchGesture.startZoom * (pinchDistance / state.pinchGesture.startDistance);
-      setViewportZoom(zoomCandidate, { focalCanvasPoint: avg, follow: false });
+      setViewportZoom(zoomCandidate, { focalCanvasPoint: avg, follow: false, preservePanAtMin: true });
       const panLast = state.pinchGesture.lastAverage || avg;
       panViewportByCanvasDelta(avg.x - panLast.x, avg.y - panLast.y);
       state.pinchGesture.lastAverage = avg;
@@ -3945,6 +4030,36 @@ function updateDiagnostics(lastAck = null) {
   el.diagnostics.textContent = JSON.stringify(debug, null, 2);
 }
 
+function displayStageSnapshot() {
+  const rect = el.canvas.getBoundingClientRect();
+  const base = frameMetrics(state.frame, rect);
+  const stage = displayStageMetrics(state.frame, rect);
+  return {
+    scale: state.viewportZoom,
+    stagePanX: Math.round(state.stagePanX * 100) / 100,
+    stagePanY: Math.round(state.stagePanY * 100) / 100,
+    viewportPanX: Math.round(state.viewportPanX * 1000) / 1000,
+    viewportPanY: Math.round(state.viewportPanY * 1000) / 1000,
+    viewport: {
+      width: Math.round(rect.width * 100) / 100,
+      height: Math.round(rect.height * 100) / 100
+    },
+    baseRect: {
+      left: Math.round(base.dx * 100) / 100,
+      top: Math.round(base.dy * 100) / 100,
+      width: Math.round(base.drawW * 100) / 100,
+      height: Math.round(base.drawH * 100) / 100
+    },
+    stageRect: {
+      left: Math.round(stage.dx * 100) / 100,
+      top: Math.round(stage.dy * 100) / 100,
+      width: Math.round(stage.drawW * 100) / 100,
+      height: Math.round(stage.drawH * 100) / 100
+    },
+    panLimits: stagePanLimits(base)
+  };
+}
+
 function debugSnapshot(lastAck = null) {
   const approxFps = approximateFps();
   const frameBytes = state.frame?.imageByteLength
@@ -3952,7 +4067,7 @@ function debugSnapshot(lastAck = null) {
     ? Math.round(state.frame.imageDataUrl.length * 0.75)
     : JSON.stringify(state.frame || {}).length);
   const rect = el.canvas.getBoundingClientRect();
-  const metrics = frameMetrics(state.frame, rect);
+  const metrics = displayStageMetrics(state.frame, rect);
   const { width: sourceW, height: sourceH } = frameSourceSize(state.frame);
   const canvasCursor = activeDisplayCursor(state.frame)
     ? cursorCanvasPoint(state.frame, metrics, sourceW, sourceH)
@@ -4011,6 +4126,9 @@ function debugSnapshot(lastAck = null) {
     viewportZoom: state.viewportZoom,
     viewportPanX: Math.round(state.viewportPanX * 1000) / 1000,
     viewportPanY: Math.round(state.viewportPanY * 1000) / 1000,
+    stagePanX: Math.round(state.stagePanX * 100) / 100,
+    stagePanY: Math.round(state.stagePanY * 100) / 100,
+    displayStage: displayStageSnapshot(),
     autoFollowCursor: state.autoFollowCursor,
     cursorLensEnabled: state.cursorLensEnabled,
     cursorMap: state.lastCursorMap,
@@ -4149,7 +4267,7 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=68").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=77").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
@@ -4187,11 +4305,14 @@ window.__remoteControllerDebug = {
   hidePointerHalo,
   setViewportZoom,
   setViewportPan,
+  setStagePan,
   resetViewport,
   resetMonitorViewState,
   selectMonitor,
   verifySavedSessionBeforeReconnect,
   frameMetrics,
+  displayStageMetrics,
+  displayStageSnapshot,
   normalizeCanvasPoint,
   isEdgePanPoint,
   handleEdgePan,
@@ -4214,6 +4335,7 @@ window.__remoteControllerDebug = {
   clearPendingFrameDecode,
   updateTouchpadStatus,
   debugSnapshot,
+  drawFrame,
   setScrollSpeed,
   setPointerSensitivity,
   setAutoFollowCursor,
@@ -4246,5 +4368,3 @@ window.__remoteControllerDebug = {
   acceptanceChecklistState,
   updateAcceptanceChecklistUi
 };
-
-
