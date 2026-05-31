@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dynam_background">#080A0E</color>
+    <color name="dynam_surface">#121722</color>
+    <color name="dynam_text">#F5F7FA</color>
+    <color name="dynam_muted">#AAB4C4</color>
+</resources>
