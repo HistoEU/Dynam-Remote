@@ -30,6 +30,8 @@ The branch is a serious app shell, not a native performance claim. Current contr
    - `GET /rtc?role=phone&token=...` for current RTC signaling.
 5. Host approval, pending sessions, approved sessions, session expiry, revocation, trusted-device opt-in, and free local Wi-Fi mode stay unchanged.
 
+The WebView should remain scoped to the user-entered host origin. Same-origin host navigations stay in WebView; external `http`/`https` destinations and custom schemes are opened through Android's external activity resolver so the shell does not become a general-purpose browser or third-party content surface.
+
 The Android shell does not add a paid account requirement. Local Wi-Fi pairing remains available without login.
 
 ## Control Compatibility

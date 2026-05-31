@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var disconnectButton: Button
     private lateinit var hostsButton: Button
+    private var allowedHostOrigin: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -215,13 +216,12 @@ class MainActivity : Activity() {
             ): Boolean {
                 val uri = request.url
                 val scheme = uri.scheme ?: return false
-                if (scheme == "http" || scheme == "https") return false
-                return try {
-                    startActivity(Intent(Intent.ACTION_VIEW, uri))
-                    true
-                } catch (_: Exception) {
-                    true
+                if (scheme == "http" || scheme == "https") {
+                    val requestOrigin = originFor(uri)
+                    if (requestOrigin != null && requestOrigin == allowedHostOrigin) return false
+                    return openExternalUri(uri)
                 }
+                return openExternalUri(uri)
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -244,6 +244,7 @@ class MainActivity : Activity() {
     private fun openHost(hostUrl: String) {
         saveRecentHost(hostUrl)
         renderRecentHosts()
+        allowedHostOrigin = originFor(Uri.parse(hostUrl))
         connectionPanel.visibility = View.GONE
         webView.visibility = View.VISIBLE
         disconnectButton.isEnabled = true
@@ -287,6 +288,21 @@ class MainActivity : Activity() {
             uri.buildUpon().encodedPath("/").build().toString()
         } else {
             uri.toString()
+        }
+    }
+
+    private fun originFor(uri: Uri): String? {
+        val scheme = uri.scheme?.lowercase() ?: return null
+        val authority = uri.encodedAuthority ?: uri.authority ?: return null
+        return "$scheme://$authority"
+    }
+
+    private fun openExternalUri(uri: Uri): Boolean {
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            true
+        } catch (_: Exception) {
+            true
         }
     }
 

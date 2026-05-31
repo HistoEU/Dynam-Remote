@@ -10,6 +10,7 @@ Chosen approach: native Kotlin Android app with a WebView controller shell. The 
 - Recent host URL storage in Android `SharedPreferences`.
 - WebView wrapper for the existing controller flow.
 - Native top bar with host switching and a Stop action that clicks the existing browser controller Stop/Disconnect control instead of sending a new protocol command.
+- WebView navigation stays on the user-entered host origin; other web links are handed to Android's external browser instead of turning the shell into a general-purpose browser.
 - Portrait/landscape handling without recreating the Activity.
 - Keyboard resize behavior, safe-area/inset padding, haptic feedback on native shell controls, and browser permission denial for camera/microphone capture prompts.
 
