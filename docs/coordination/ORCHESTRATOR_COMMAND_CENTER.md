@@ -141,8 +141,11 @@ Do not mark the full product launch-ready until there is evidence for:
 
 - Keep this command center current.
 - Watch for worker branches appearing on origin.
-- Review Worker 1 as soon as it pushes.
-- Pull Worker 2's branch early if it touches `public/app.js` heavily; it is the highest user-facing risk.
+- Worker 3 reviewed: `docs/coordination/reviews/worker-3-capture-monitor-performance.md`.
+- Worker 5 reviewed: `docs/coordination/reviews/worker-5-ios-shell.md`.
+- Worker 2 reviewed and patched: `docs/coordination/reviews/worker-2-browser-pwa-polish.md`.
+- Worker 4 reviewed and patched: `docs/coordination/reviews/worker-4-android-shell.md`.
+- Review Worker 1 as soon as it commits/pushes because its CI/package/acceptance changes affect every later merge.
+- Watch for Worker 6 / `infra/product-remote-readiness`; no local worktree or remote branch was visible during the latest sweep.
 - Keep a separate review note for each worker under `docs/coordination/reviews/`.
 - Do not implement worker-owned features while workers are active unless a branch stalls and the user redirects ownership.
-
