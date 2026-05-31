@@ -1043,6 +1043,68 @@ test("phone display cursor prefers the fresh input ack over stale stream cursor 
   }
 });
 
+test("phone zoom follow uses fresh pointer ack while RTC video has no native frame", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      const debug = window.__remoteControllerDebug;
+      debug.state.monitors = [{
+        id: "display-2",
+        name: "Display 2",
+        bounds: { left: 1920, top: 131, width: 1920, height: 1080 },
+        logicalBounds: { left: 1920, top: 131, width: 1920, height: 1080 },
+        scaleFactor: 1,
+        orientation: "landscape",
+        status: "screen"
+      }];
+      debug.state.selectedMonitorId = "display-2";
+      debug.state.frame = null;
+      debug.state.frameImage = null;
+      debug.state.frameImageReady = false;
+      debug.state.rtcActive = true;
+      debug.state.rtcVideoWidth = 1920;
+      debug.state.rtcVideoHeight = 1080;
+      debug.setAutoFollowCursor(true);
+      debug.setViewportZoom(2);
+      debug.updateRemoteCursorFromAck({
+        point: { x: 3360, y: 940 },
+        coordinateSpace: "logical-desktop"
+      });
+      const snapshot = debug.debugSnapshot();
+      return {
+        cursor: debug.activeDisplayCursor(null),
+        lastAckCursor: debug.state.lastAckCursor,
+        panX: debug.state.viewportPanX,
+        panY: debug.state.viewportPanY,
+        canvasCursor: snapshot.canvasCursor,
+        drawRect: snapshot.drawRect,
+        frameSize: snapshot.frameSize,
+        rtcVideo: snapshot.rtcVideo
+      };
+    });
+
+    assert.equal(result.frameSize, null);
+    assert.deepEqual(result.rtcVideo, { width: 1920, height: 1080 });
+    assert.equal(result.cursor.source, "ack");
+    assert.equal(result.lastAckCursor.x, 1440);
+    assert.equal(result.lastAckCursor.y, 809);
+    assert.ok(result.panX > 0.45);
+    assert.ok(result.panY > 0.45);
+    assert.ok(result.canvasCursor.x > result.drawRect.x + result.drawRect.width * 0.7);
+    assert.ok(result.canvasCursor.y > result.drawRect.y + result.drawRect.height * 0.7);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("phone cursor overlay compensates for Windows display scaling and can disable follow mode", async () => {
   const browser = await chromium.launch();
   try {
@@ -1292,6 +1354,93 @@ test("phone monitor selection resets stale zoom, cursor, and frame state", async
     assert.equal(result.sent.some((item) => item.type === "monitor.select" && item.payload.monitorId === "display-2"), true);
     assert.equal(result.debugMonitor, "display-2");
     assert.equal(result.debugFrame, null);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("phone monitor selection disables RTC so selected display uses native capture fallback", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      const debug = window.__remoteControllerDebug;
+      const sent = [];
+      const rtcSent = [];
+      debug.state.token = "token";
+      debug.state.approved = true;
+      debug.state.connected = true;
+      debug.state.ws = {
+        readyState: WebSocket.OPEN,
+        send(value) {
+          sent.push(JSON.parse(value));
+        }
+      };
+      debug.state.rtcWs = {
+        readyState: WebSocket.OPEN,
+        send(value) {
+          rtcSent.push(JSON.parse(value));
+        },
+        close() {
+          rtcSent.push({ type: "closed" });
+        }
+      };
+      debug.state.rtcActive = true;
+      debug.state.rtcPc = { close() { rtcSent.push({ type: "pc.closed" }); } };
+      debug.state.rtcVideoWidth = 1920;
+      debug.state.rtcVideoHeight = 1080;
+      debug.state.monitors = [
+        {
+          id: "display-1",
+          name: "Display 1",
+          bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape",
+          primary: true,
+          status: "screen"
+        },
+        {
+          id: "display-2",
+          name: "Display 2",
+          bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape",
+          primary: false,
+          status: "screen"
+        }
+      ];
+      debug.state.selectedMonitorId = "display-1";
+      const changed = debug.selectMonitor("display-2");
+      return {
+        changed,
+        selected: debug.state.selectedMonitorId,
+        rtcWs: debug.state.rtcWs,
+        rtcPc: debug.state.rtcPc,
+        rtcActive: debug.state.rtcActive,
+        streamVisible: debug.state.streamVisible,
+        sent: sent.map((item) => ({ type: item.type, payload: item.payload })),
+        rtcSent: rtcSent.map((item) => ({ type: item.type, payload: item.payload }))
+      };
+    });
+
+    assert.equal(result.changed, true);
+    assert.equal(result.selected, "display-2");
+    assert.equal(result.rtcWs, null);
+    assert.equal(result.rtcPc, null);
+    assert.equal(result.rtcActive, false);
+    assert.equal(result.streamVisible, true);
+    assert.equal(result.rtcSent.some((item) => item.type === "rtc.stop" && item.payload.reason === "monitor-switch"), true);
+    assert.equal(result.sent.some((item) => item.type === "stream.visibility" && item.payload.visible === true), true);
+    assert.equal(result.sent.some((item) => item.type === "monitor.select" && item.payload.monitorId === "display-2"), true);
   } finally {
     await browser.close();
   }

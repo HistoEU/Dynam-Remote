@@ -1417,8 +1417,8 @@ function resetMonitorViewState({ clearFrame = false } = {}) {
 function selectMonitor(monitorId) {
   if (!monitorId || monitorId === state.selectedMonitorId) return false;
   state.selectedMonitorId = monitorId;
-  if (state.rtcActive || el.rtcVideo?.srcObject) {
-    closeRtcPeer();
+  if (state.rtcActive || state.rtcWs || state.rtcPc || el.rtcVideo?.srcObject) {
+    closeRtcReceiver("monitor-switch");
     state.rtcRemoteStream = null;
     state.rtcVideoWidth = 0;
     state.rtcVideoHeight = 0;
@@ -1805,7 +1805,7 @@ function calibrationStatusText(calibration = activeMonitorCalibration()) {
   return `Calibrated ${Math.round(Number(calibration.maxError || 0) * 1000) / 10}%`;
 }
 
-function frameMetrics(frame = state.frame, rect = el.canvas.getBoundingClientRect()) {
+function frameMetrics(frame = displayFrameForCursor(), rect = el.canvas.getBoundingClientRect()) {
   const { width: sourceW, height: sourceH } = frameSourceSize(frame);
   return sourceMetrics(sourceW, sourceH, rect);
 }
@@ -1831,12 +1831,46 @@ function selectedMonitor() {
   return state.monitors.find((item) => item.id === state.selectedMonitorId) || null;
 }
 
+function syntheticDisplayFrame() {
+  const monitor = selectedMonitor();
+  const width = Math.max(1, Number(state.rtcVideoWidth || monitor?.bounds?.width || 1280));
+  const height = Math.max(1, Number(state.rtcVideoHeight || monitor?.bounds?.height || 720));
+  return {
+    monitorId: state.selectedMonitorId,
+    width,
+    height,
+    windows: [],
+    cursor: state.lastAckCursor || null,
+    monitorGeometry: {
+      id: monitor?.id || state.selectedMonitorId,
+      name: monitor?.name || "Display",
+      bounds: monitor?.bounds || { left: 0, top: 0, width, height },
+      logicalBounds: monitor?.logicalBounds || monitor?.bounds || { left: 0, top: 0, width, height },
+      scaleFactor: monitor?.scaleFactor || 1,
+      primary: Boolean(monitor?.primary),
+      orientation: monitor?.orientation || "landscape",
+      captureSize: { width, height }
+    },
+    syntheticDisplayFrame: true
+  };
+}
+
+function displayFrameForCursor(frame = state.frame) {
+  return frame || syntheticDisplayFrame();
+}
+
 function monitorScale(monitor = selectedMonitor()) {
   const scale = Number(monitor?.scaleFactor || 1);
   return Number.isFinite(scale) && scale > 0 ? scale : 1;
 }
 
 function frameSourceSize(frame = state.frame) {
+  if (frame?.syntheticDisplayFrame) {
+    return {
+      width: Math.max(1, Number(frame.width || frame.monitorGeometry?.captureSize?.width || 1)),
+      height: Math.max(1, Number(frame.height || frame.monitorGeometry?.captureSize?.height || 1))
+    };
+  }
   const naturalW = Number(state.frameImage?.naturalWidth || state.frameImage?.width || 0);
   const naturalH = Number(state.frameImage?.naturalHeight || state.frameImage?.height || 0);
   const frameW = Number(frame?.width || frame?.monitorGeometry?.captureSize?.width || 0);
@@ -1955,9 +1989,10 @@ function normalizeIncomingFrame(frame = {}) {
 }
 
 function recentAckCursor(frame = state.frame) {
-  if (!state.lastAckCursor || !state.lastAckCursorAt || !frame) return null;
+  const displayFrame = displayFrameForCursor(frame);
+  if (!state.lastAckCursor || !state.lastAckCursorAt || !displayFrame) return null;
   if (performance.now() - state.lastAckCursorAt > ACK_CURSOR_HOLD_MS) return null;
-  const { width, height } = frameSourceSize(frame);
+  const { width, height } = frameSourceSize(displayFrame);
   const ackWidth = Number(state.lastAckCursor.frameWidth || width);
   const ackHeight = Number(state.lastAckCursor.frameHeight || height);
   if (Math.abs(ackWidth - width) > 2 || Math.abs(ackHeight - height) > 2) return null;
@@ -1965,7 +2000,8 @@ function recentAckCursor(frame = state.frame) {
 }
 
 function activeDisplayCursor(frame = state.frame) {
-  return recentAckCursor(frame) || frame?.cursor || null;
+  const displayFrame = displayFrameForCursor(frame);
+  return recentAckCursor(displayFrame) || displayFrame?.cursor || null;
 }
 
 function stageMetricsFromBase(baseMetrics) {
@@ -1986,7 +2022,7 @@ function stageMetricsFromBase(baseMetrics) {
   };
 }
 
-function displayStageMetrics(frame = state.frame, rect = el.canvas.getBoundingClientRect()) {
+function displayStageMetrics(frame = displayFrameForCursor(), rect = el.canvas.getBoundingClientRect()) {
   return stageMetricsFromBase(frameMetrics(frame, rect));
 }
 
@@ -2234,9 +2270,10 @@ function normalizeCanvasPoint(point) {
 }
 
 function remoteCursorNormalized() {
-  const cursor = activeDisplayCursor(state.frame);
-  if (!state.frame || !cursor || cursor.visible === false) return null;
-  const { width: sourceW, height: sourceH } = frameSourceSize(state.frame);
+  const frame = displayFrameForCursor();
+  const cursor = activeDisplayCursor(frame);
+  if (!frame || !cursor || cursor.visible === false) return null;
+  const { width: sourceW, height: sourceH } = frameSourceSize(frame);
   const x = Number(cursor.x);
   const y = Number(cursor.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -2296,9 +2333,15 @@ function localCursorFromAbsolute(point, monitor = selectedMonitor()) {
 
 function updateRemoteCursorFromAck(ack = {}) {
   const point = ack.point;
-  if (!state.frame || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return;
-  const local = localCursorFromAbsolute({ ...point, coordinateSpace: ack.coordinateSpace || "logical-desktop", source: "ack" });
-  const { width, height } = frameSourceSize(state.frame);
+  const frame = displayFrameForCursor();
+  if (!frame || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return;
+  const local = mapHostCursorToFrame({
+    ...point,
+    coordinateSpace: ack.coordinateSpace || "logical-desktop",
+    source: "ack"
+  }, selectedMonitor(), frame);
+  if (!local) return;
+  const { width, height } = frameSourceSize(frame);
   state.lastAckCursor = {
     x: local.x,
     y: local.y,
@@ -2310,7 +2353,7 @@ function updateRemoteCursorFromAck(ack = {}) {
     raw: local.raw || null
   };
   state.lastAckCursorAt = performance.now();
-  state.frame.cursor = state.lastAckCursor;
+  if (state.frame) state.frame.cursor = state.lastAckCursor;
   followViewportTowardCursor({ force: false, strength: 1, skipDraw: true });
   drawFrame();
 }
@@ -2642,7 +2685,7 @@ function drawScreenFrame(frame, w, h) {
 
 function drawRtcOverlay(frame, w, h) {
   ctx.clearRect(0, 0, w, h);
-  const overlayFrame = frame || rtcVideoFrame();
+  const overlayFrame = frame || displayFrameForCursor() || rtcVideoFrame();
   updateRtcVideoViewport();
   const sourceW = Math.max(1, Number(state.rtcVideoWidth || overlayFrame?.width || selectedMonitor()?.bounds?.width || 1280));
   const sourceH = Math.max(1, Number(state.rtcVideoHeight || overlayFrame?.height || selectedMonitor()?.bounds?.height || 720));
@@ -2653,9 +2696,9 @@ function drawRtcOverlay(frame, w, h) {
   const baseMetrics = sourceMetrics(sourceW, sourceH, { width: w, height: h });
   clampStagePan(baseMetrics);
   const metrics = displayStageMetricsForSource(sourceW, sourceH, { width: w, height: h });
-  if (frame) {
-    const lensDrawn = drawCursorLens(frame, metrics, sourceW, sourceH, el.rtcVideo);
-    if (!lensDrawn) drawRemoteCursor(frame, metrics, sourceW, sourceH);
+  if (activeDisplayCursor(overlayFrame)) {
+    const lensDrawn = drawCursorLens(overlayFrame, metrics, sourceW, sourceH, el.rtcVideo);
+    if (!lensDrawn) drawRemoteCursor(overlayFrame, metrics, sourceW, sourceH);
   }
   drawCalibrationOverlay(metrics);
   if (state.calibrationMode) {
@@ -4034,8 +4077,9 @@ function updateDiagnostics(lastAck = null) {
 
 function displayStageSnapshot() {
   const rect = el.canvas.getBoundingClientRect();
-  const base = frameMetrics(state.frame, rect);
-  const stage = displayStageMetrics(state.frame, rect);
+  const frame = displayFrameForCursor();
+  const base = frameMetrics(frame, rect);
+  const stage = displayStageMetrics(frame, rect);
   return {
     scale: state.viewportZoom,
     stagePanX: Math.round(state.stagePanX * 100) / 100,
@@ -4069,10 +4113,11 @@ function debugSnapshot(lastAck = null) {
     ? Math.round(state.frame.imageDataUrl.length * 0.75)
     : JSON.stringify(state.frame || {}).length);
   const rect = el.canvas.getBoundingClientRect();
-  const metrics = displayStageMetrics(state.frame, rect);
-  const { width: sourceW, height: sourceH } = frameSourceSize(state.frame);
-  const canvasCursor = activeDisplayCursor(state.frame)
-    ? cursorCanvasPoint(state.frame, metrics, sourceW, sourceH)
+  const displayFrame = displayFrameForCursor();
+  const metrics = displayStageMetrics(displayFrame, rect);
+  const { width: sourceW, height: sourceH } = frameSourceSize(displayFrame);
+  const canvasCursor = activeDisplayCursor(displayFrame)
+    ? cursorCanvasPoint(displayFrame, metrics, sourceW, sourceH)
     : null;
   return {
     connected: state.connected,
@@ -4270,14 +4315,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=77").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=78").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v77-reloaded";
+        const reloadKey = "remote-controller-shell-v78-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();
