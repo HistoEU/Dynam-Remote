@@ -1446,6 +1446,75 @@ test("phone monitor selection disables RTC so selected display uses native captu
   }
 });
 
+test("phone monitor selection suppresses automatic RTC reconnect after socket close", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      const debug = window.__remoteControllerDebug;
+      debug.state.token = "token";
+      debug.state.approved = true;
+      debug.state.connected = true;
+      debug.state.ws = {
+        readyState: WebSocket.OPEN,
+        send() {}
+      };
+      debug.state.rtcWs = {
+        readyState: WebSocket.OPEN,
+        send() {},
+        close() {}
+      };
+      debug.state.rtcActive = true;
+      debug.state.rtcPc = { close() {} };
+      debug.state.monitors = [
+        {
+          id: "display-1",
+          name: "Display 1",
+          bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape",
+          primary: true,
+          status: "screen"
+        },
+        {
+          id: "display-2",
+          name: "Display 2",
+          bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape",
+          primary: false,
+          status: "screen"
+        }
+      ];
+      debug.state.selectedMonitorId = "display-1";
+      const now = performance.now();
+      debug.selectMonitor("display-2");
+      return {
+        blockedForMs: Math.round(Number(debug.state.rtcReconnectSuppressedUntil || 0) - now),
+        reason: debug.state.rtcReconnectSuppressedReason || "",
+        rtcWs: debug.state.rtcWs,
+        streamVisible: debug.state.streamVisible
+      };
+    });
+
+    assert.equal(result.rtcWs, null);
+    assert.equal(result.streamVisible, true);
+    assert.ok(result.blockedForMs >= 25000);
+    assert.equal(result.reason, "monitor-switch");
+  } finally {
+    await browser.close();
+  }
+});
+
 test("phone debug snapshot exposes frame geometry, draw rectangle, and canvas cursor", async () => {
   const browser = await chromium.launch();
   try {
