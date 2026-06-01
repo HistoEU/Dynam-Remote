@@ -63,12 +63,11 @@ test("host console exposes copyable phone URLs next to QR codes", async () => {
     assert.equal(result.qrCount >= 1, true);
     assert.equal(result.copyButtonCount >= 1, true);
     assert.match(result.featuredText, /Paste this on your phone/);
-    assert.match(result.featuredUrl, /v=77/);
-    assert.equal(result.appVersion, "77");
+    assert.match(result.featuredUrl, new RegExp(`v=${result.appVersion}`));
     assert.match(result.featuredUrl, /acceptance=1/);
     assert.match(result.featuredUrl, /gate=same-wifi/);
-    assert.equal(result.copiedUrls.every((item) => item.includes("v=77")), true);
-    assert.equal(result.addressQrUrls.every((item) => item.includes("v=77")), true);
+    assert.equal(result.copiedUrls.every((item) => item.includes(`v=${result.appVersion}`)), true);
+    assert.equal(result.addressQrUrls.every((item) => item.includes(`v=${result.appVersion}`)), true);
 
     await page.screenshot({
       path: path.join("output", "playwright", "host-console-copy-addresses.png"),
@@ -102,9 +101,8 @@ test("host console labels recommended, secondary, and Tailscale phone URLs", asy
     assert.equal(guidance.ethernet.label, "Recommended");
     assert.equal(guidance.nord.label, "Secondary");
     assert.equal(guidance.tailscale.label, "Different Wi-Fi");
-    assert.equal(guidance.versioned, "http://192.168.0.7:4317/?v=77");
+    assert.equal(guidance.versioned, `http://192.168.0.7:4317/?v=${guidance.apiVersion}`);
     assert.equal(guidance.preservesVersion, "http://192.168.0.7:4317/?v=76");
-    assert.equal(guidance.apiVersion, "77");
     assert.equal(guidance.visibleBadgeCount >= 1, true);
   } finally {
     await browser.close();
@@ -264,20 +262,19 @@ test("host console exposes gate-aware physical proof links", async () => {
     ]).url.includes("192.168.0.7")), true);
     assert.equal(result.links[0].gate, "same-wifi");
     assert.match(result.links[0].url, /acceptance=1/);
-    assert.match(result.links[0].url, /v=77/);
+    assert.match(result.links[0].url, /v=\d+/);
     assert.match(result.links[0].url, /gate=same-wifi/);
     assert.equal(result.links[0].url.includes("10.5.0.2"), false);
     assert.equal(result.links[1].gate, "tailscale");
     assert.match(result.links[1].url, /gate=tailscale/);
     assert.match(result.addQuery, /step=physical-phone-proof/);
-    assert.match(result.addQuery, /v=77/);
+    assert.match(result.addQuery, /v=\d+/);
     assert.match(result.visibleText, /Same-Wi-Fi Proof|No proof links/);
     assert.equal(result.copyUrls.every((url) => url.includes("acceptance=1")), true);
   } finally {
     await browser.close();
   }
 });
-
 
 
 

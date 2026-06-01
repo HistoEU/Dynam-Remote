@@ -175,6 +175,22 @@ function createInputAdapter({ enabled = false, log = () => {}, nativeProvider = 
     return next;
   }
 
+  async function centerOnMonitor(monitor) {
+    if (!realEnabled) return null;
+    const bounds = monitor?.bounds || {};
+    const logicalBounds = monitor?.logicalBounds || bounds;
+    const scale = Number(monitor?.scaleFactor || 1);
+    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    const point = {
+      x: Math.round(Number(logicalBounds.left || 0) + (Number(bounds.width || logicalBounds.width || 0) / safeScale / 2)),
+      y: Math.round(Number(logicalBounds.top || 0) + (Number(bounds.height || logicalBounds.height || 0) / safeScale / 2))
+    };
+    const { mouse, Point } = loadNut();
+    await mouse.setPosition(new Point(point.x, point.y));
+    lastPointer = point;
+    return point;
+  }
+
   async function getCursorPosition() {
     if (!realEnabled) return lastPointer;
     try {
@@ -338,6 +354,7 @@ function createInputAdapter({ enabled = false, log = () => {}, nativeProvider = 
       return Promise.resolve();
     },
     releaseAll,
+    centerOnMonitor,
     getCursorPosition,
     getHeldState: () => ({
       buttons: [...pressedButtons],

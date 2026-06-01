@@ -193,6 +193,42 @@ test("input adapter maps direct touch into logical coordinates on scaled display
   assert.deepEqual(ack.point, { x: 2048, y: 1152 });
 });
 
+test("input adapter centers the cursor on the selected monitor", async () => {
+  const positions = [];
+  const nativeProvider = {
+    Button: { LEFT: "LEFT" },
+    Key: {},
+    Point: class Point {
+      constructor(x, y) {
+        this.x = x;
+        this.y = y;
+      }
+    },
+    mouse: {
+      config: {},
+      async getPosition() {
+        return { x: 0, y: 0 };
+      },
+      async setPosition(point) {
+        positions.push({ x: point.x, y: point.y });
+      },
+      async releaseButton() {}
+    },
+    keyboard: { config: {}, async releaseKey() {} }
+  };
+  const input = createInputAdapter({ enabled: true, nativeProvider });
+
+  const point = await input.centerOnMonitor({
+    id: "display-2",
+    bounds: { left: -1920, top: 139, width: 1920, height: 1080 },
+    logicalBounds: { left: -1920, top: 139, width: 1920, height: 1080 },
+    scaleFactor: 1
+  });
+
+  assert.deepEqual(point, { x: -960, y: 679 });
+  assert.deepEqual(positions.at(-1), { x: -960, y: 679 });
+});
+
 test("input adapter treats touchpad movement as relative even if visual normalized coordinates are present", async () => {
   const positions = [];
   const nativeProvider = {

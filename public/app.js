@@ -16,7 +16,7 @@ const FRAME_DECODE_STALL_MS = 1200;
 const VISIBLE_STREAM_ASSERT_MS = 900;
 const CANVAS_KEEPALIVE_PAINT_MS = 220;
 const RTC_HEARTBEAT_MS = 2500;
-const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 60000;
+const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 8 * 60 * 60 * 1000;
 const TOUCHPAD_VIRTUAL_GAIN = 1.34;
 const TOUCHPAD_HINT_GAIN = 0.18;
 const TOUCHPAD_EDGE_GAIN = 1.18;
@@ -1340,6 +1340,12 @@ function handleServerPacket(packet) {
         state.touchpadAcked += 1;
         updateRemoteCursorFromAck(packet.payload);
         updateTouchpadStatus();
+      }
+      if (packet.payload.ackType === "monitor.select" && packet.payload.centeredPointer) {
+        updateRemoteCursorFromAck({
+          point: packet.payload.centeredPointer,
+          coordinateSpace: packet.payload.coordinateSpace || "logical-desktop"
+        });
       }
       if (packet.payload.ackType === "acceptance.mark" && el.acceptanceMarkStatus) {
         setAcceptanceProofStatus("Proof marker saved in host logs.", true);
@@ -4341,14 +4347,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=79").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=80").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v79-reloaded";
+        const reloadKey = "remote-controller-shell-v80-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();

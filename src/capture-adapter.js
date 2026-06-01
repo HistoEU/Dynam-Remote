@@ -1,6 +1,6 @@
 "use strict";
 
-const screenshot = require("screenshot-desktop");
+const screenshotDesktop = require("screenshot-desktop");
 
 const { MONITORS: FAKE_MONITORS, createFakeFrame } = require("./fake-stream");
 const { makeMessage } = require("./protocol");
@@ -241,7 +241,7 @@ function uniqueSorted(items = []) {
   return [...new Set(items)].sort();
 }
 
-function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = null } = {}) {
+function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = null, screenshotProvider = screenshotDesktop } = {}) {
   let monitors = FAKE_MONITORS;
   const rememberedMonitors = new Map();
   let screenAvailable = false;
@@ -261,7 +261,7 @@ function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = 
 
   function refreshMonitors() {
     if (mode !== "screen") return Promise.resolve(false);
-    displayReady = screenshot.listDisplays()
+    displayReady = screenshotProvider.listDisplays()
       .then((listed) => {
         if (Array.isArray(listed) && listed.length) {
           monitors = listed.map(normalizeDisplay);
@@ -295,7 +295,7 @@ function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = 
     try {
       const monitor = allMonitors().find((item) => item.id === monitorId) || allMonitors()[0];
       const image = await withTimeout(
-        screenshot({ format: "jpg", screen: monitor.sourceId }),
+        screenshotProvider({ format: "jpg", screen: monitor.sourceId }),
         CAPTURE_TIMEOUT_MS,
         `Screen capture timed out after ${CAPTURE_TIMEOUT_MS}ms.`
       );
@@ -363,7 +363,7 @@ function createCaptureAdapter({ mode = "fake", log = () => {}, cursorProvider = 
       });
     } catch (error) {
       log("capture.screen.failed", { error: error.message });
-      return createFakeFrame({ frameId, monitorId, quality, inputMode });
+      throw error;
     }
   }
 

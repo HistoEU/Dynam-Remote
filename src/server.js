@@ -1531,8 +1531,35 @@ async function handleClientMessage(client, raw) {
         monitorCount: availableMonitors.length,
         sourceId: requestedMonitor.sourceId || ""
       });
-      sendWsJson(client.socket, makeMessage("ack", ackPayload(message, { selectedMonitorId, captureSourceName })));
+      let centeredPointer = null;
+      if (client.session.approved && client.session.permissions?.pointer) {
+        try {
+          centeredPointer = await input.centerOnMonitor(requestedMonitor);
+          if (centeredPointer) {
+            markInputActivity("pointer.move");
+            log(input.isEnabled() ? "input.real" : "input.dryRun", {
+              sessionId: client.session.id,
+              commandType: "monitor.centerPointer",
+              monitorId: selectedMonitorId
+            });
+          }
+        } catch (error) {
+          log("input.failed", {
+            sessionId: client.session.id,
+            commandType: "monitor.centerPointer",
+            monitorId: selectedMonitorId,
+            error: error.message
+          });
+        }
+      }
+      sendWsJson(client.socket, makeMessage("ack", ackPayload(message, {
+        selectedMonitorId,
+        captureSourceName,
+        centeredPointer,
+        coordinateSpace: centeredPointer ? "logical-desktop" : null
+      })));
       scheduleStateBroadcast({ immediate: true });
+      scheduleImmediateFrame(`monitor-select-${selectedMonitorId}`);
       if (previousMonitorId !== selectedMonitorId && settings.autoStart && availableMonitors.length > 1) {
         setTimeout(() => {
           try {
