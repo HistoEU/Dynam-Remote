@@ -1508,7 +1508,8 @@ test("phone monitor selection suppresses automatic RTC reconnect after socket cl
 
     assert.equal(result.rtcWs, null);
     assert.equal(result.streamVisible, true);
-    assert.ok(result.blockedForMs >= 25000);
+    assert.ok(result.blockedForMs >= 3000);
+    assert.ok(result.blockedForMs <= 7000);
     assert.equal(result.reason, "monitor-switch");
   } finally {
     await browser.close();
@@ -1558,6 +1559,89 @@ test("phone monitor selection ack moves the visible cursor to the new display ce
     assert.equal(result.cursor.y, 540);
     assert.ok(result.snapshot.canvasCursor.x > result.snapshot.drawRect.x + result.snapshot.drawRect.width * 0.45);
     assert.ok(result.snapshot.canvasCursor.x < result.snapshot.drawRect.x + result.snapshot.drawRect.width * 0.55);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("phone ignores stale stream frames from the previous monitor after a display switch", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      const debug = window.__remoteControllerDebug;
+      debug.state.monitors = [
+        {
+          id: "display-1",
+          name: "Display 1",
+          bounds: { left: 1920, top: 131, width: 1920, height: 1080 },
+          logicalBounds: { left: 1920, top: 131, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape",
+          status: "screen"
+        },
+        {
+          id: "display-2",
+          name: "Display 2",
+          bounds: { left: -1920, top: 139, width: 1920, height: 1080 },
+          logicalBounds: { left: -1920, top: 139, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape",
+          status: "screen"
+        }
+      ];
+      debug.state.selectedMonitorId = "display-2";
+      debug.handleServerPacket({
+        type: "stream.frame",
+        payload: {
+          frameId: 10,
+          monitorId: "display-2",
+          width: 1920,
+          height: 1080,
+          cursor: { x: 960, y: 540, visible: true },
+          windows: [],
+          capturedAt: Date.now()
+        }
+      });
+      const before = {
+        frameId: debug.state.frame.frameId,
+        monitorId: debug.state.frame.monitorId,
+        cursor: debug.activeDisplayCursor(debug.state.frame)
+      };
+      debug.handleServerPacket({
+        type: "stream.frame",
+        payload: {
+          frameId: 11,
+          monitorId: "display-1",
+          width: 1920,
+          height: 1080,
+          cursor: { x: 40, y: 40, visible: true },
+          windows: [],
+          capturedAt: Date.now()
+        }
+      });
+      return {
+        before,
+        after: {
+          frameId: debug.state.frame.frameId,
+          monitorId: debug.state.frame.monitorId,
+          cursor: debug.activeDisplayCursor(debug.state.frame)
+        }
+      };
+    });
+
+    assert.equal(result.before.frameId, 10);
+    assert.equal(result.after.frameId, 10);
+    assert.equal(result.after.monitorId, "display-2");
+    assert.equal(result.after.cursor.x, 960);
+    assert.equal(result.after.cursor.y, 540);
   } finally {
     await browser.close();
   }

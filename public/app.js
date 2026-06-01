@@ -16,7 +16,7 @@ const FRAME_DECODE_STALL_MS = 1200;
 const VISIBLE_STREAM_ASSERT_MS = 900;
 const CANVAS_KEEPALIVE_PAINT_MS = 220;
 const RTC_HEARTBEAT_MS = 2500;
-const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 8 * 60 * 60 * 1000;
+const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 4200;
 const TOUCHPAD_VIRTUAL_GAIN = 1.34;
 const TOUCHPAD_HINT_GAIN = 0.18;
 const TOUCHPAD_EDGE_GAIN = 1.18;
@@ -178,6 +178,7 @@ const state = {
   frameDecodeRecoveries: 0,
   frameDecodeErrors: 0,
   frameBlobFallbacks: 0,
+  staleMonitorFrameDrops: 0,
   skippedBlackFrames: 0,
   canvasKeepalivePaints: 0,
   lastCanvasPaintAt: 0,
@@ -1085,12 +1086,18 @@ function sendRtc(type, payload = {}) {
 }
 
 function suppressRtcReconnect(reason = "manual", durationMs = RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS) {
+  clearTimeout(state.rtcReconnectTimer);
   state.rtcReconnectSuppressedUntil = Math.max(
     state.rtcReconnectSuppressedUntil || 0,
     performance.now() + Math.max(0, Number(durationMs) || 0)
   );
   state.rtcReconnectSuppressedReason = reason;
-  clearTimeout(state.rtcReconnectTimer);
+  if (reason === "monitor-switch") {
+    state.rtcReconnectTimer = setTimeout(() => {
+      state.rtcReconnectTimer = null;
+      if (state.connected && state.approved && !state.manualDisconnect) connectRtcReceiver();
+    }, Math.max(0, Number(durationMs) || 0) + 80);
+  }
 }
 
 function rtcReconnectSuppressed() {
@@ -1144,10 +1151,11 @@ function closeRtcPeer() {
 }
 
 function closeRtcReceiver(reason = "manual", options = {}) {
+  clearTimeout(state.rtcReconnectTimer);
+  state.rtcReconnectTimer = null;
   if (options.suppressReconnectMs) {
     suppressRtcReconnect(reason, options.suppressReconnectMs);
   }
-  clearTimeout(state.rtcReconnectTimer);
   closeRtcPeer();
   if (state.rtcWs) {
     try {
@@ -1320,6 +1328,12 @@ function handleServerPacket(packet) {
     applyState(packet.payload.state || packet.payload);
   }
   if (packet.type === "stream.frame") {
+    const incomingMonitorId = packet.payload?.monitorId || packet.payload?.monitorGeometry?.id || "";
+    if (incomingMonitorId && state.selectedMonitorId && incomingMonitorId !== state.selectedMonitorId) {
+      state.staleMonitorFrameDrops += 1;
+      updateDiagnostics();
+      return;
+    }
     state.frame = normalizeIncomingFrame(packet.payload);
     followViewportTowardCursor({ force: false, strength: 1, skipDraw: true });
     state.lastFrameAt = performance.now();
@@ -4347,14 +4361,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=80").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=82").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v80-reloaded";
+        const reloadKey = "remote-controller-shell-v82-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();
