@@ -16,7 +16,9 @@ const FRAME_DECODE_STALL_MS = 1200;
 const VISIBLE_STREAM_ASSERT_MS = 900;
 const CANVAS_KEEPALIVE_PAINT_MS = 220;
 const RTC_HEARTBEAT_MS = 2500;
-const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 8 * 60 * 60 * 1000;
+const RTC_RECONNECT_MS = 1200;
+const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 650;
+const RTC_MONITOR_SWITCH_RECONNECT_DELAY_MS = 900;
 const PENDING_MONITOR_SELECTION_MS = 4500;
 const TOUCHPAD_VIRTUAL_GAIN = 1.34;
 const TOUCHPAD_HINT_GAIN = 0.18;
@@ -77,7 +79,10 @@ function readAcceptanceContext() {
 }
 
 function readRtcReceiverDefault() {
-  return false;
+  const params = new URLSearchParams(location.search);
+  if (params.get("rtc") === "0") return false;
+  if (params.get("rtc") === "1") return true;
+  return localStorage.getItem("remote-rtc-video") !== "0";
 }
 
 const acceptanceContext = readAcceptanceContext();
@@ -1137,14 +1142,30 @@ function connectRtcReceiver() {
     setRtcVideoActive(false, "rtc-socket-closed");
     closeRtcPeer();
     if (!state.manualDisconnect && state.connected && !rtcReconnectSuppressed()) {
-      clearTimeout(state.rtcReconnectTimer);
-      state.rtcReconnectTimer = setTimeout(connectRtcReceiver, 1200);
+      scheduleRtcReconnect("rtc-socket-closed", RTC_RECONNECT_MS);
     }
   });
   state.rtcWs.addEventListener("error", () => {
     state.rtcStatus = "error";
     updateDiagnostics();
   });
+}
+
+function scheduleRtcReconnect(reason = "rtc-reconnect", delayMs = RTC_RECONNECT_MS) {
+  clearTimeout(state.rtcReconnectTimer);
+  state.rtcReconnectTimer = null;
+  if (!state.connected || state.manualDisconnect || !shouldUseRtcReceiver()) return false;
+  state.rtcReconnectTimer = setTimeout(() => {
+    state.rtcReconnectTimer = null;
+    if (!state.connected || state.manualDisconnect || !shouldUseRtcReceiver()) return;
+    if (rtcReconnectSuppressed()) {
+      const waitMs = Math.max(80, Number(state.rtcReconnectSuppressedUntil || 0) - performance.now() + 40);
+      scheduleRtcReconnect(`${reason}-after-suppression`, waitMs);
+      return;
+    }
+    connectRtcReceiver();
+  }, Math.max(0, Number(delayMs) || 0));
+  return true;
 }
 
 function closeRtcPeer() {
@@ -1174,7 +1195,9 @@ function closeRtcReceiver(reason = "manual", options = {}) {
   state.rtcWs = null;
   state.rtcConnected = false;
   setRtcVideoActive(false, reason);
-  if (options.reconnect && shouldUseRtcReceiver()) connectRtcReceiver();
+  if (options.reconnect && shouldUseRtcReceiver()) {
+    scheduleRtcReconnect(reason, options.reconnectDelayMs || RTC_RECONNECT_MS);
+  }
 }
 
 function ensureRtcPeer() {
@@ -1516,6 +1539,9 @@ function selectMonitor(monitorId) {
       el.rtcVideo.srcObject = null;
     }
     setRtcVideoActive(false, "monitor-switch");
+  }
+  if (shouldUseRtcReceiver()) {
+    scheduleRtcReconnect("monitor-switch", RTC_MONITOR_SWITCH_RECONNECT_DELAY_MS);
   }
   resetMonitorViewState({ clearFrame: true });
   const monitor = state.monitors.find((item) => item.id === state.selectedMonitorId);
@@ -4405,14 +4431,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=86").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=87").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v86-reloaded";
+        const reloadKey = "remote-controller-shell-v87-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();

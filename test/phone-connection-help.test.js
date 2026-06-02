@@ -1359,7 +1359,7 @@ test("phone monitor selection resets stale zoom, cursor, and frame state", async
   }
 });
 
-test("phone monitor selection disables RTC so selected display uses native capture fallback", async () => {
+test("phone monitor selection restarts RTC for the selected display", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({
@@ -1368,68 +1368,114 @@ test("phone monitor selection disables RTC so selected display uses native captu
       hasTouch: true
     });
     await page.goto(baseUrl, { waitUntil: "load" });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
       document.getElementById("pairing").classList.add("hidden");
       document.getElementById("controller").classList.remove("hidden");
       const debug = window.__remoteControllerDebug;
+      const OriginalWebSocket = window.WebSocket;
       const sent = [];
       const rtcSent = [];
-      debug.state.token = "token";
-      debug.state.approved = true;
-      debug.state.connected = true;
-      debug.state.ws = {
-        readyState: WebSocket.OPEN,
-        send(value) {
-          sent.push(JSON.parse(value));
+      const opened = [];
+      class FakeWebSocket {
+        static CONNECTING = OriginalWebSocket.CONNECTING;
+        static OPEN = OriginalWebSocket.OPEN;
+        static CLOSING = OriginalWebSocket.CLOSING;
+        static CLOSED = OriginalWebSocket.CLOSED;
+
+        constructor(url) {
+          this.url = String(url);
+          this.readyState = FakeWebSocket.CONNECTING;
+          this.binaryType = "";
+          this.listeners = {};
+          opened.push(this.url);
+          setTimeout(() => {
+            this.readyState = FakeWebSocket.OPEN;
+            for (const listener of this.listeners.open || []) listener({ type: "open" });
+          }, 0);
         }
-      };
-      debug.state.rtcWs = {
-        readyState: WebSocket.OPEN,
-        send(value) {
-          rtcSent.push(JSON.parse(value));
-        },
+
+        addEventListener(type, listener) {
+          this.listeners[type] ||= [];
+          this.listeners[type].push(listener);
+        }
+
+        send() {}
+
         close() {
-          rtcSent.push({ type: "closed" });
+          this.readyState = FakeWebSocket.CLOSED;
+          for (const listener of this.listeners.close || []) listener({ type: "close" });
         }
-      };
-      debug.state.rtcActive = true;
-      debug.state.rtcPc = { close() { rtcSent.push({ type: "pc.closed" }); } };
-      debug.state.rtcVideoWidth = 1920;
-      debug.state.rtcVideoHeight = 1080;
-      debug.state.monitors = [
-        {
-          id: "display-1",
-          name: "Display 1",
-          bounds: { left: 0, top: 0, width: 1920, height: 1080 },
-          logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
-          scaleFactor: 1,
-          orientation: "landscape",
-          primary: true,
-          status: "screen"
-        },
-        {
-          id: "display-2",
-          name: "Display 2",
-          bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
-          logicalBounds: { left: 1920, top: 0, width: 1920, height: 1080 },
-          scaleFactor: 1,
-          orientation: "landscape",
-          primary: false,
-          status: "screen"
-        }
-      ];
-      debug.state.selectedMonitorId = "display-1";
-      const changed = debug.selectMonitor("display-2");
-      return {
-        changed,
-        selected: debug.state.selectedMonitorId,
-        rtcWs: debug.state.rtcWs,
-        rtcPc: debug.state.rtcPc,
-        rtcActive: debug.state.rtcActive,
-        streamVisible: debug.state.streamVisible,
-        sent: sent.map((item) => ({ type: item.type, payload: item.payload })),
-        rtcSent: rtcSent.map((item) => ({ type: item.type, payload: item.payload }))
-      };
+      }
+      window.WebSocket = FakeWebSocket;
+      try {
+        debug.state.token = "token";
+        debug.state.approved = true;
+        debug.state.connected = true;
+        debug.state.ws = {
+          readyState: FakeWebSocket.OPEN,
+          send(value) {
+            sent.push(JSON.parse(value));
+          }
+        };
+        debug.state.rtcWs = {
+          readyState: FakeWebSocket.OPEN,
+          send(value) {
+            rtcSent.push(JSON.parse(value));
+          },
+          close() {
+            rtcSent.push({ type: "closed" });
+          }
+        };
+        debug.state.rtcActive = true;
+        debug.state.rtcPc = { close() { rtcSent.push({ type: "pc.closed" }); } };
+        debug.state.rtcVideoWidth = 1920;
+        debug.state.rtcVideoHeight = 1080;
+        debug.state.monitors = [
+          {
+            id: "display-1",
+            name: "Display 1",
+            bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+            logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
+            scaleFactor: 1,
+            orientation: "landscape",
+            primary: true,
+            status: "screen"
+          },
+          {
+            id: "display-2",
+            name: "Display 2",
+            bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+            logicalBounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+            scaleFactor: 1,
+            orientation: "landscape",
+            primary: false,
+            status: "screen"
+          }
+        ];
+        debug.state.selectedMonitorId = "display-1";
+        const now = performance.now();
+        const changed = debug.selectMonitor("display-2");
+        const afterSwitch = {
+          changed,
+          selected: debug.state.selectedMonitorId,
+          rtcWs: debug.state.rtcWs,
+          rtcPc: debug.state.rtcPc,
+          rtcActive: debug.state.rtcActive,
+          streamVisible: debug.state.streamVisible,
+          blockedForMs: Math.round(Number(debug.state.rtcReconnectSuppressedUntil || 0) - now),
+          reconnectScheduled: Boolean(debug.state.rtcReconnectTimer),
+          sent: sent.map((item) => ({ type: item.type, payload: item.payload })),
+          rtcSent: rtcSent.map((item) => ({ type: item.type, payload: item.payload }))
+        };
+        await new Promise((resolve) => setTimeout(resolve, 1050));
+        return {
+          ...afterSwitch,
+          opened,
+          rtcAfterReconnect: Boolean(debug.state.rtcWs)
+        };
+      } finally {
+        window.WebSocket = OriginalWebSocket;
+      }
     });
 
     assert.equal(result.changed, true);
@@ -1438,6 +1484,11 @@ test("phone monitor selection disables RTC so selected display uses native captu
     assert.equal(result.rtcPc, null);
     assert.equal(result.rtcActive, false);
     assert.equal(result.streamVisible, true);
+    assert.ok(result.blockedForMs >= 300);
+    assert.ok(result.blockedForMs < 3000);
+    assert.equal(result.reconnectScheduled, true);
+    assert.equal(result.opened.some((url) => url.includes("/rtc?role=phone")), true);
+    assert.equal(result.rtcAfterReconnect, true);
     assert.equal(result.rtcSent.some((item) => item.type === "rtc.stop" && item.payload.reason === "monitor-switch"), true);
     assert.equal(result.sent.some((item) => item.type === "stream.visibility" && item.payload.visible === true), true);
     assert.equal(result.sent.some((item) => item.type === "monitor.select" && item.payload.monitorId === "display-2"), true);
@@ -1446,7 +1497,7 @@ test("phone monitor selection disables RTC so selected display uses native captu
   }
 });
 
-test("phone uses the native screen stream by default instead of auto-starting RTC", async () => {
+test("phone starts high-quality RTC video by default", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({
@@ -1454,10 +1505,7 @@ test("phone uses the native screen stream by default instead of auto-starting RT
       isMobile: true,
       hasTouch: true
     });
-    await page.addInitScript(() => {
-      localStorage.setItem("remote-rtc-video", "1");
-    });
-    await page.goto(`${baseUrl}/?rtc=1`, { waitUntil: "load" });
+    await page.goto(baseUrl, { waitUntil: "load" });
     const result = await page.evaluate(async () => {
       const debug = window.__remoteControllerDebug;
       const OriginalWebSocket = window.WebSocket;
@@ -1507,9 +1555,9 @@ test("phone uses the native screen stream by default instead of auto-starting RT
       }
     });
 
-    assert.equal(result.rtcEnabled, false);
+    assert.equal(result.rtcEnabled, true);
     assert.equal(result.opened.some((url) => url.includes("/ws?token=")), true);
-    assert.equal(result.opened.some((url) => url.includes("/rtc?role=phone")), false);
+    assert.equal(result.opened.some((url) => url.includes("/rtc?role=phone")), true);
   } finally {
     await browser.close();
   }
@@ -1610,7 +1658,7 @@ test("phone ignores stale server monitor state while a display switch is pending
   }
 });
 
-test("phone monitor selection suppresses automatic RTC reconnect after socket close", async () => {
+test("phone monitor selection briefly pauses RTC before reconnecting to the new capture", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({
@@ -1666,14 +1714,17 @@ test("phone monitor selection suppresses automatic RTC reconnect after socket cl
         blockedForMs: Math.round(Number(debug.state.rtcReconnectSuppressedUntil || 0) - now),
         reason: debug.state.rtcReconnectSuppressedReason || "",
         rtcWs: debug.state.rtcWs,
-        streamVisible: debug.state.streamVisible
+        streamVisible: debug.state.streamVisible,
+        reconnectScheduled: Boolean(debug.state.rtcReconnectTimer)
       };
     });
 
     assert.equal(result.rtcWs, null);
     assert.equal(result.streamVisible, true);
-    assert.ok(result.blockedForMs >= 25000);
+    assert.ok(result.blockedForMs >= 300);
+    assert.ok(result.blockedForMs < 3000);
     assert.equal(result.reason, "monitor-switch");
+    assert.equal(result.reconnectScheduled, true);
   } finally {
     await browser.close();
   }

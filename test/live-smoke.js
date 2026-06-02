@@ -102,7 +102,7 @@ async function verifyPhonePageRendersBinaryStream() {
       localStorage.setItem("remote-token", token);
       localStorage.setItem("remote-session-id", sessionId);
     }, { token: pair.token, sessionId: pair.sessionId });
-    const response = await page.goto(`${baseUrl}/?v=render-smoke-${Date.now()}`, { waitUntil: "load" });
+    const response = await page.goto(`${baseUrl}/?rtc=0&v=render-smoke-${Date.now()}`, { waitUntil: "load" });
     assert.equal(response.ok(), true);
     assert.match(response.headers()["content-security-policy"] || "", /img-src 'self' data: blob:/);
     await page.waitForFunction(() => {

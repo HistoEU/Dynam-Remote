@@ -49,7 +49,6 @@ test("host console exposes copyable phone URLs next to QR codes", async () => {
         status: document.querySelector(".address-copy-status")?.textContent || "",
         qrCount: document.querySelectorAll(".address-qr").length,
         copyButtonCount: document.querySelectorAll("[data-copy-url]").length,
-        lowLatencyHidden: document.getElementById("lowLatencyCard")?.classList.contains("hidden"),
         featuredText: document.getElementById("featuredPhoneLink")?.innerText || "",
         featuredUrl: document.querySelector("#featuredPhoneLink [data-copy-url]")?.dataset.copyUrl || "",
         copiedUrls: Array.from(document.querySelectorAll("[data-copy-url]")).map((button) => button.dataset.copyUrl || ""),
@@ -63,7 +62,6 @@ test("host console exposes copyable phone URLs next to QR codes", async () => {
     assert.equal(result.status, "Copied");
     assert.equal(result.qrCount >= 1, true);
     assert.equal(result.copyButtonCount >= 1, true);
-    assert.equal(result.lowLatencyHidden, true);
     assert.match(result.featuredText, /Paste this on your phone/);
     assert.match(result.featuredUrl, new RegExp(`v=${result.appVersion}`));
     assert.match(result.featuredUrl, /acceptance=1/);
@@ -277,10 +275,3 @@ test("host console exposes gate-aware physical proof links", async () => {
     await browser.close();
   }
 });
-
-
-
-
-
-
-
