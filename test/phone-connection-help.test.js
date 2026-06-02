@@ -983,7 +983,7 @@ test("phone updates the display cursor immediately and pans zoomed view toward i
   }
 });
 
-test("phone display cursor prefers the fresh input ack over stale stream cursor metadata", async () => {
+test("phone display cursor prefers the current stream cursor over movement ack metadata", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({
@@ -1033,11 +1033,11 @@ test("phone display cursor prefers the fresh input ack over stale stream cursor 
     });
 
     assert.equal(result.ackCursor.source, "ack");
-    assert.equal(result.activeCursor.source, "ack");
+    assert.equal(result.activeCursor.source, "frame");
     assert.equal(result.streamCursor.source, "frame");
-    assert.equal(result.snapshotCursorSource, "ack");
-    assert.equal(result.snapshotSourceX, result.ackCursor.x);
-    assert.equal(result.snapshotSourceY, result.ackCursor.y);
+    assert.equal(result.snapshotCursorSource, "frame");
+    assert.equal(result.snapshotSourceX, result.streamCursor.x);
+    assert.equal(result.snapshotSourceY, result.streamCursor.y);
   } finally {
     await browser.close();
   }
@@ -1508,8 +1508,7 @@ test("phone monitor selection suppresses automatic RTC reconnect after socket cl
 
     assert.equal(result.rtcWs, null);
     assert.equal(result.streamVisible, true);
-    assert.ok(result.blockedForMs >= 3000);
-    assert.ok(result.blockedForMs <= 7000);
+    assert.ok(result.blockedForMs >= 25000);
     assert.equal(result.reason, "monitor-switch");
   } finally {
     await browser.close();

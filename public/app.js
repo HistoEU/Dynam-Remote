@@ -16,7 +16,7 @@ const FRAME_DECODE_STALL_MS = 1200;
 const VISIBLE_STREAM_ASSERT_MS = 900;
 const CANVAS_KEEPALIVE_PAINT_MS = 220;
 const RTC_HEARTBEAT_MS = 2500;
-const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 4200;
+const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 8 * 60 * 60 * 1000;
 const TOUCHPAD_VIRTUAL_GAIN = 1.34;
 const TOUCHPAD_HINT_GAIN = 0.18;
 const TOUCHPAD_EDGE_GAIN = 1.18;
@@ -1087,17 +1087,12 @@ function sendRtc(type, payload = {}) {
 
 function suppressRtcReconnect(reason = "manual", durationMs = RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS) {
   clearTimeout(state.rtcReconnectTimer);
+  state.rtcReconnectTimer = null;
   state.rtcReconnectSuppressedUntil = Math.max(
     state.rtcReconnectSuppressedUntil || 0,
     performance.now() + Math.max(0, Number(durationMs) || 0)
   );
   state.rtcReconnectSuppressedReason = reason;
-  if (reason === "monitor-switch") {
-    state.rtcReconnectTimer = setTimeout(() => {
-      state.rtcReconnectTimer = null;
-      if (state.connected && state.approved && !state.manualDisconnect) connectRtcReceiver();
-    }, Math.max(0, Number(durationMs) || 0) + 80);
-  }
 }
 
 function rtcReconnectSuppressed() {
@@ -2047,7 +2042,8 @@ function recentAckCursor(frame = state.frame) {
 
 function activeDisplayCursor(frame = state.frame) {
   const displayFrame = displayFrameForCursor(frame);
-  return recentAckCursor(displayFrame) || displayFrame?.cursor || null;
+  const frameCursor = displayFrame?.syntheticDisplayFrame ? null : displayFrame?.cursor;
+  return frameCursor || recentAckCursor(displayFrame) || displayFrame?.cursor || null;
 }
 
 function stageMetricsFromBase(baseMetrics) {
@@ -4361,14 +4357,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=82").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=84").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v82-reloaded";
+        const reloadKey = "remote-controller-shell-v84-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();
