@@ -77,8 +77,7 @@ function readAcceptanceContext() {
 }
 
 function readRtcReceiverDefault() {
-  const params = new URLSearchParams(location.search);
-  return params.get("rtc") === "1" || localStorage.getItem("remote-rtc-video") === "1";
+  return false;
 }
 
 const acceptanceContext = readAcceptanceContext();
@@ -4406,14 +4405,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=85").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=86").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v85-reloaded";
+        const reloadKey = "remote-controller-shell-v86-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();

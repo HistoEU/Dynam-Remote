@@ -1454,7 +1454,10 @@ test("phone uses the native screen stream by default instead of auto-starting RT
       isMobile: true,
       hasTouch: true
     });
-    await page.goto(baseUrl, { waitUntil: "load" });
+    await page.addInitScript(() => {
+      localStorage.setItem("remote-rtc-video", "1");
+    });
+    await page.goto(`${baseUrl}/?rtc=1`, { waitUntil: "load" });
     const result = await page.evaluate(async () => {
       const debug = window.__remoteControllerDebug;
       const OriginalWebSocket = window.WebSocket;

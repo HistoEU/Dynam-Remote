@@ -15,7 +15,11 @@ const { createSessionStore, randomToken } = require("./session-store");
 const { createSettingsStore } = require("./settings-store");
 const { nextFrameDelayMs } = require("./frame-timing");
 const { createRtcRoom } = require("./rtc-room");
-const { shouldAllowRtcCaptureOpen, shouldAutoLaunchRtcCapture } = require("./rtc-autostart-policy");
+const {
+  isRtcCaptureFeatureEnabled,
+  shouldAllowRtcCaptureOpen,
+  shouldAutoLaunchRtcCapture
+} = require("./rtc-autostart-policy");
 const { acceptKey, decodeFrames, sendBinary: sendWsBinary, sendJson: sendWsJson } = require("./ws");
 
 const PORT = Number(process.env.PORT || 4317);
@@ -32,6 +36,7 @@ const CAPTURE_SOURCE_CORRECTION_COOLDOWN_MS = 2600;
 const hostKey = process.env.HOST_KEY || randomToken(18);
 const publicUrl = process.env.PUBLIC_URL || "";
 const captureMode = process.env.CAPTURE_MODE || "fake";
+const rtcCaptureFeatureEnabled = isRtcCaptureFeatureEnabled();
 const SECURITY_HEADERS = {
   "Content-Security-Policy": [
     "default-src 'self'",
@@ -379,7 +384,9 @@ function currentCaptureDiagnostics(monitors, rtcStatus) {
 function getPublicState() {
   const monitors = capture.getMonitors();
   const addresses = getReachableAddresses(PORT, { publicUrl });
-  const rtcStatus = rtcRoom ? rtcRoom.getState() : { available: false, state: "unavailable" };
+  const rtcStatus = rtcCaptureFeatureEnabled && rtcRoom
+    ? rtcRoom.getState()
+    : { available: false, state: "disabled", hostConnected: false, phoneConnected: false };
   return {
     app: {
       name: "Remote Controller",
@@ -1000,7 +1007,13 @@ function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   let fileName = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
   if (fileName === "host") fileName = "host.html";
-  if (fileName === "capture") fileName = "capture.html";
+  if (fileName === "capture") {
+    if (!rtcCaptureFeatureEnabled) return send(res, 404, "Capture helper disabled");
+    fileName = "capture.html";
+  }
+  if (!rtcCaptureFeatureEnabled && (fileName === "capture.html" || fileName === "capture.js")) {
+    return send(res, 404, "Capture helper disabled");
+  }
   const filePath = path.normalize(path.join(PUBLIC_DIR, fileName));
   if (!filePath.startsWith(PUBLIC_DIR)) return send(res, 403, "Forbidden");
   fs.readFile(filePath, (error, data) => {
@@ -1786,6 +1799,11 @@ function handleRtcUpgrade(req, socket) {
 function handleUpgrade(req, socket) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname === "/rtc") {
+    if (!rtcCaptureFeatureEnabled) {
+      socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     handleRtcUpgrade(req, socket);
     return;
   }

@@ -11,6 +11,7 @@ const el = {
   rateLimitState: document.getElementById("rateLimitState"),
   featuredPhoneLink: document.getElementById("featuredPhoneLink"),
   rtcStatusText: document.getElementById("rtcStatusText"),
+  lowLatencyCard: document.getElementById("lowLatencyCard"),
   captureVideoLink: document.getElementById("captureVideoLink"),
   openCaptureWindow: document.getElementById("openCaptureWindow"),
   captureLaunchStatus: document.getElementById("captureLaunchStatus"),
@@ -503,6 +504,9 @@ function render(state) {
 
 function renderRtcStatus(state) {
   const rtc = state.rtcStatus || {};
+  const available = rtc.available !== false;
+  el.lowLatencyCard?.classList.toggle("hidden", !available);
+  if (!available) return;
   if (el.rtcStatusText) {
     const host = rtc.hostConnected ? "capture page ready" : "capture page closed";
     const phone = rtc.phoneConnected ? "phone ready" : "phone waiting";
