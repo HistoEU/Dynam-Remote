@@ -17,6 +17,7 @@ const VISIBLE_STREAM_ASSERT_MS = 900;
 const CANVAS_KEEPALIVE_PAINT_MS = 220;
 const RTC_HEARTBEAT_MS = 2500;
 const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 8 * 60 * 60 * 1000;
+const PENDING_MONITOR_SELECTION_MS = 4500;
 const TOUCHPAD_VIRTUAL_GAIN = 1.34;
 const TOUCHPAD_HINT_GAIN = 0.18;
 const TOUCHPAD_EDGE_GAIN = 1.18;
@@ -75,6 +76,11 @@ function readAcceptanceContext() {
   };
 }
 
+function readRtcReceiverDefault() {
+  const params = new URLSearchParams(location.search);
+  return params.get("rtc") === "1" || localStorage.getItem("remote-rtc-video") === "1";
+}
+
 const acceptanceContext = readAcceptanceContext();
 const ACCEPTANCE_CHECKLISTS = {
   "same-wifi": [
@@ -121,9 +127,12 @@ const state = {
   rtcVideoWidth: 0,
   rtcVideoHeight: 0,
   rtcIceQueue: [],
+  rtcReceiverEnabled: readRtcReceiverDefault(),
   connected: false,
   approved: false,
   selectedMonitorId: "display-1",
+  pendingMonitorSelectionId: "",
+  pendingMonitorSelectionAt: 0,
   monitors: [],
   captureLaunch: null,
   captureDiagnostics: null,
@@ -1047,7 +1056,7 @@ function connectWebSocket() {
     hideConnectionHelp();
     setStatus("Connected");
     reportStreamVisibility(document.hidden);
-    connectRtcReceiver();
+    if (shouldUseRtcReceiver()) connectRtcReceiver();
     resumeLiveSession("socket-open-resume");
     setTimeout(() => assertLiveStreamVisible("socket-open"), 120);
     setTimeout(() => startStreamWakeBurst("socket-open-burst"), 160);
@@ -1095,6 +1104,10 @@ function suppressRtcReconnect(reason = "manual", durationMs = RTC_MONITOR_SWITCH
   state.rtcReconnectSuppressedReason = reason;
 }
 
+function shouldUseRtcReceiver() {
+  return Boolean(state.rtcReceiverEnabled);
+}
+
 function rtcReconnectSuppressed() {
   if (!state.rtcReconnectSuppressedUntil) return false;
   if (performance.now() < state.rtcReconnectSuppressedUntil) return true;
@@ -1105,6 +1118,7 @@ function rtcReconnectSuppressed() {
 
 function connectRtcReceiver() {
   if (!state.token || !state.connected) return;
+  if (!shouldUseRtcReceiver()) return;
   if (rtcReconnectSuppressed()) return;
   if (state.rtcWs && [WebSocket.CONNECTING, WebSocket.OPEN].includes(state.rtcWs.readyState)) return;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -1161,7 +1175,7 @@ function closeRtcReceiver(reason = "manual", options = {}) {
   state.rtcWs = null;
   state.rtcConnected = false;
   setRtcVideoActive(false, reason);
-  if (options.reconnect) connectRtcReceiver();
+  if (options.reconnect && shouldUseRtcReceiver()) connectRtcReceiver();
 }
 
 function ensureRtcPeer() {
@@ -1350,6 +1364,14 @@ function handleServerPacket(packet) {
         updateRemoteCursorFromAck(packet.payload);
         updateTouchpadStatus();
       }
+      if (packet.payload.ackType === "monitor.select" && packet.payload.selectedMonitorId) {
+        const confirmedMonitorId = packet.payload.selectedMonitorId;
+        if (confirmedMonitorId !== state.selectedMonitorId) {
+          state.selectedMonitorId = confirmedMonitorId;
+          resetMonitorViewState({ clearFrame: true });
+        }
+        clearPendingMonitorSelection(confirmedMonitorId);
+      }
       if (packet.payload.ackType === "monitor.select" && packet.payload.centeredPointer) {
         updateRemoteCursorFromAck({
           point: packet.payload.centeredPointer,
@@ -1372,9 +1394,34 @@ function handleServerPacket(packet) {
   }
 }
 
+function activePendingMonitorSelection() {
+  if (!state.pendingMonitorSelectionId) return "";
+  const age = performance.now() - Number(state.pendingMonitorSelectionAt || 0);
+  if (age <= PENDING_MONITOR_SELECTION_MS) return state.pendingMonitorSelectionId;
+  state.pendingMonitorSelectionId = "";
+  state.pendingMonitorSelectionAt = 0;
+  return "";
+}
+
+function clearPendingMonitorSelection(monitorId = "") {
+  if (!state.pendingMonitorSelectionId) return;
+  if (monitorId && monitorId !== state.pendingMonitorSelectionId) return;
+  state.pendingMonitorSelectionId = "";
+  state.pendingMonitorSelectionAt = 0;
+}
+
 function applyState(next) {
   state.monitors = next.monitors || [];
-  const nextMonitorId = next.selectedMonitorId || state.selectedMonitorId;
+  const serverMonitorId = next.selectedMonitorId || state.selectedMonitorId;
+  const pendingMonitorId = activePendingMonitorSelection();
+  let nextMonitorId = serverMonitorId;
+  if (pendingMonitorId) {
+    if (serverMonitorId === pendingMonitorId) {
+      clearPendingMonitorSelection(serverMonitorId);
+    } else {
+      nextMonitorId = state.selectedMonitorId;
+    }
+  }
   if (nextMonitorId !== state.selectedMonitorId) {
     resetMonitorViewState({ clearFrame: true });
   }
@@ -1456,6 +1503,8 @@ function resetMonitorViewState({ clearFrame = false } = {}) {
 function selectMonitor(monitorId) {
   if (!monitorId || monitorId === state.selectedMonitorId) return false;
   state.selectedMonitorId = monitorId;
+  state.pendingMonitorSelectionId = monitorId;
+  state.pendingMonitorSelectionAt = performance.now();
   if (state.rtcActive || state.rtcWs || state.rtcPc || el.rtcVideo?.srcObject) {
     closeRtcReceiver("monitor-switch", {
       suppressReconnectMs: RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS
@@ -4357,14 +4406,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=84").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=85").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v84-reloaded";
+        const reloadKey = "remote-controller-shell-v85-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();
@@ -4376,6 +4425,8 @@ if ("serviceWorker" in navigator) {
 window.__remoteControllerDebug = {
   state,
   send,
+  connectWebSocket,
+  shouldUseRtcReceiver,
   syncHostClock,
   commandTimestamp,
   handleServerPacket,

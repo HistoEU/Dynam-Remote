@@ -611,7 +611,9 @@ async function launchManagedCapture({ force = false } = {}) {
     const suffix = force ? "&force=1" : "";
     const result = await hostApi(`/api/open-capture?autostart=1&autoselect=1${suffix}`, { method: "POST", body: "{}" });
     if (el.captureLaunchStatus) {
-      el.captureLaunchStatus.textContent = result.alreadyOpen
+      el.captureLaunchStatus.textContent = result.skipped
+        ? "Stable screen stream is active. Low-latency video autostart is disabled for this run."
+        : result.alreadyOpen
         ? result.sharing
           ? "Capture is already running and will be reused."
           : result.startRequested

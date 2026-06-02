@@ -15,6 +15,7 @@ const { createSessionStore, randomToken } = require("./session-store");
 const { createSettingsStore } = require("./settings-store");
 const { nextFrameDelayMs } = require("./frame-timing");
 const { createRtcRoom } = require("./rtc-room");
+const { shouldAllowRtcCaptureOpen, shouldAutoLaunchRtcCapture } = require("./rtc-autostart-policy");
 const { acceptKey, decodeFrames, sendBinary: sendWsBinary, sendJson: sendWsJson } = require("./ws");
 
 const PORT = Number(process.env.PORT || 4317);
@@ -929,7 +930,7 @@ function ensureCaptureBrowser({ autoStart = true, autoSelect = true, reason = "m
 }
 
 function maybeAutoLaunchCapture(reason = "phone-connected") {
-  if (!settings.autoStart) return false;
+  if (!shouldAutoLaunchRtcCapture({ settings })) return false;
   const now = Date.now();
   if (now - lastAutoCaptureLaunchAt < 8000) return false;
   lastAutoCaptureLaunchAt = now;
@@ -955,7 +956,7 @@ function maybeAutoLaunchCapture(reason = "phone-connected") {
 }
 
 function scheduleAutoLaunchCapture(reason = "phone-connected", delayMs = 150) {
-  if (!settings.autoStart) return false;
+  if (!shouldAutoLaunchRtcCapture({ settings })) return false;
   setTimeout(() => {
     try {
       maybeAutoLaunchCapture(reason);
@@ -1036,8 +1037,21 @@ function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/open-capture") {
     if (!requireHostKey(req, res)) return;
     try {
+      const autoStartRequested = url.searchParams.get("autostart") !== "0";
+      if (!shouldAllowRtcCaptureOpen({ autoStartRequested, settings })) {
+        const result = {
+          ok: true,
+          skipped: true,
+          mode: "rtc-autostart-disabled",
+          autoStart: false,
+          autoSelect: false,
+          reason: url.searchParams.get("reason") || "manual"
+        };
+        log("host.capture.openSkipped", result);
+        return sendJson(res, 200, result);
+      }
       const result = ensureCaptureBrowser({
-        autoStart: url.searchParams.get("autostart") !== "0",
+        autoStart: autoStartRequested,
         autoSelect: url.searchParams.get("autoselect") !== "0",
         force: url.searchParams.get("force") === "1",
         monitorId: url.searchParams.get("monitor") || selectedMonitorId,
@@ -1560,7 +1574,7 @@ async function handleClientMessage(client, raw) {
       })));
       scheduleStateBroadcast({ immediate: true });
       scheduleImmediateFrame(`monitor-select-${selectedMonitorId}`);
-      if (previousMonitorId !== selectedMonitorId && settings.autoStart && availableMonitors.length > 1) {
+      if (previousMonitorId !== selectedMonitorId && shouldAutoLaunchRtcCapture({ settings }) && availableMonitors.length > 1) {
         setTimeout(() => {
           try {
             ensureCaptureBrowser({
@@ -1608,19 +1622,21 @@ async function handleClientMessage(client, raw) {
       captureSourceName: captureSourceNameForMonitor(monitorId)
     })));
     scheduleStateBroadcast({ immediate: true });
-    setTimeout(() => {
-      try {
-        ensureCaptureBrowser({
-          autoStart: true,
-          autoSelect: true,
-          force: true,
-          monitorId,
-          reason: `capture-source-${captureSourceNameForMonitor(monitorId).replace(/\s+/g, "-").toLowerCase()}`
-        });
-      } catch (error) {
-        log("host.capture.sourceLockFailed", { monitorId, error: error.message });
-      }
-    }, 50);
+    if (shouldAutoLaunchRtcCapture({ settings })) {
+      setTimeout(() => {
+        try {
+          ensureCaptureBrowser({
+            autoStart: true,
+            autoSelect: true,
+            force: true,
+            monitorId,
+            reason: `capture-source-${captureSourceNameForMonitor(monitorId).replace(/\s+/g, "-").toLowerCase()}`
+          });
+        } catch (error) {
+          log("host.capture.sourceLockFailed", { monitorId, error: error.message });
+        }
+      }, 50);
+    }
     return;
   }
   if (message.type === "stream.setQuality") {
@@ -1845,6 +1861,12 @@ function scheduleFramePump(delayMs = effectiveFrameIntervalMs()) {
 
 function onListening(host) {
   log("host.started", { port: PORT, host });
+  if (!shouldAutoLaunchRtcCapture({ settings })) {
+    stopCaptureBrowserProcesses("rtc-autostart-disabled-startup");
+    setTimeout(() => {
+      stopCaptureBrowserProcesses("rtc-autostart-disabled-delayed-startup");
+    }, 2000);
+  }
   lastMonitorSignature = monitorSignature();
   const addresses = getReachableAddresses(PORT, { publicUrl });
   console.log(`Remote Controller running on http://127.0.0.1:${PORT}`);
@@ -1865,7 +1887,7 @@ function onListening(host) {
       });
     }, 8000);
   }
-  if (settings.autoStart) {
+  if (shouldAutoLaunchRtcCapture({ settings })) {
     setTimeout(() => {
       maybeAutoLaunchCapture("host-startup");
     }, 900);
