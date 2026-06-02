@@ -1390,7 +1390,7 @@ function handleServerPacket(packet) {
         const confirmedMonitorId = packet.payload.selectedMonitorId;
         if (confirmedMonitorId !== state.selectedMonitorId) {
           state.selectedMonitorId = confirmedMonitorId;
-          resetMonitorViewState({ clearFrame: true });
+          resetMonitorViewState({ clearFrame: false });
         }
         clearPendingMonitorSelection(confirmedMonitorId);
       }
@@ -1445,7 +1445,7 @@ function applyState(next) {
     }
   }
   if (nextMonitorId !== state.selectedMonitorId) {
-    resetMonitorViewState({ clearFrame: true });
+    resetMonitorViewState({ clearFrame: false });
   }
   state.selectedMonitorId = nextMonitorId;
   state.streamStats = next.streamStats || state.streamStats;
@@ -1543,7 +1543,7 @@ function selectMonitor(monitorId) {
   if (shouldUseRtcReceiver()) {
     scheduleRtcReconnect("monitor-switch", RTC_MONITOR_SWITCH_RECONNECT_DELAY_MS);
   }
-  resetMonitorViewState({ clearFrame: true });
+  resetMonitorViewState({ clearFrame: false });
   const monitor = state.monitors.find((item) => item.id === state.selectedMonitorId);
   el.monitorName.textContent = monitor ? monitor.name : "Display";
   send("monitor.select", { monitorId, monitor });
@@ -4431,14 +4431,14 @@ if (state.token) {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js?v=87").then((registration) => {
+  navigator.serviceWorker.register("/sw.js?v=88").then((registration) => {
     registration.update().catch(() => {});
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v87-reloaded";
+        const reloadKey = "remote-controller-shell-v88-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();

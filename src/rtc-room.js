@@ -33,6 +33,22 @@ function cleanNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function cleanCaptureVerification(payload = {}) {
+  if (!isObject(payload)) return null;
+  return {
+    status: cleanString(payload.status, 40),
+    requestedMonitor: cleanString(payload.requestedMonitor, 80),
+    requestedSource: cleanString(payload.requestedSource, 120),
+    actualMonitorId: cleanString(payload.actualMonitorId, 80),
+    score: cleanNumber(payload.score),
+    runnerUpMonitorId: cleanString(payload.runnerUpMonitorId, 80),
+    runnerUpScore: cleanNumber(payload.runnerUpScore),
+    comparedAt: cleanNumber(payload.comparedAt),
+    reason: cleanString(payload.reason, 180),
+    error: cleanString(payload.error, 160)
+  };
+}
+
 function cleanCaptureMetadata(payload = {}) {
   return {
     sharing: Boolean(payload.sharing),
@@ -51,6 +67,7 @@ function cleanCaptureMetadata(payload = {}) {
     firstFrameTimeMs: cleanNumber(payload.firstFrameTimeMs),
     staleCaptureAgeMs: cleanNumber(payload.staleCaptureAgeMs),
     fallbackReason: cleanString(payload.fallbackReason, 160),
+    verification: cleanCaptureVerification(payload.verification),
     updatedAt: Date.now()
   };
 }

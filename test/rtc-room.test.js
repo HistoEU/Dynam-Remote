@@ -143,7 +143,18 @@ test("rtc room sanitizes capture source and performance diagnostics", () => {
       iceConnectionState: "completed",
       firstFrameTimeMs: "421",
       staleCaptureAgeMs: "13001",
-      fallbackReason: "manual source confirmation required"
+      fallbackReason: "manual source confirmation required",
+      verification: {
+        status: "mismatch",
+        requestedMonitor: "display-2",
+        requestedSource: "Screen 2",
+        actualMonitorId: "display-1",
+        score: "0.913",
+        runnerUpMonitorId: "display-2",
+        runnerUpScore: "0.541",
+        comparedAt: "1234567",
+        reason: "video fingerprint matched display-1"
+      }
     }
   });
 
@@ -161,4 +172,10 @@ test("rtc room sanitizes capture source and performance diagnostics", () => {
   assert.equal(capture.fallbackReason, "manual source confirmation required");
   assert.equal(capture.requestedMonitor, "display-2");
   assert.equal(capture.requestedSource, "Screen 2");
+  assert.equal(capture.verification.status, "mismatch");
+  assert.equal(capture.verification.actualMonitorId, "display-1");
+  assert.equal(capture.verification.score, 0.913);
+  assert.equal(capture.verification.runnerUpMonitorId, "display-2");
+  assert.equal(capture.verification.runnerUpScore, 0.541);
+  assert.equal(capture.verification.reason, "video fingerprint matched display-1");
 });

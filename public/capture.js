@@ -6,6 +6,13 @@ const autoStart = params.get("autostart") === "1";
 const requestedSource = params.get("source") || "this screen";
 const requestedMonitor = params.get("monitor") || "";
 const RTC_HEARTBEAT_MS = 2000;
+const CAPTURE_VERIFY_SAMPLE_W = 24;
+const CAPTURE_VERIFY_SAMPLE_H = 14;
+const CAPTURE_VERIFY_DELAY_MS = 420;
+const CAPTURE_VERIFY_RETRY_MS = 1800;
+const CAPTURE_VERIFY_REFRESH_MS = 9000;
+const CAPTURE_VERIFY_MATCH_SCORE = 0.74;
+const CAPTURE_VERIFY_AMBIGUOUS_GAP = 0.028;
 const DISPLAY_OUTPUT_AUDIO = {
   systemAudio: "include",
   suppressLocalAudioPlayback: false,
@@ -37,6 +44,9 @@ const capture = {
   startedAt: 0,
   firstFrameAt: 0,
   fallbackReason: "",
+  verification: null,
+  verifying: false,
+  verifyTimer: null,
   statsTimer: null
 };
 
@@ -140,7 +150,8 @@ function currentCaptureMeta() {
     iceConnectionState: capture.pc?.iceConnectionState || "",
     firstFrameTimeMs: capture.startedAt && capture.firstFrameAt ? capture.firstFrameAt - capture.startedAt : 0,
     staleCaptureAgeMs: 0,
-    fallbackReason: capture.fallbackReason || ""
+    fallbackReason: capture.fallbackReason || "",
+    verification: capture.verification || null
   };
 }
 
@@ -161,6 +172,155 @@ function markFirstFrame() {
   capture.firstFrameAt = Date.now();
   updateCaptureDiagnosticsUi();
   sendRtc("rtc.status", currentCaptureMeta());
+  scheduleCaptureVerification("first-frame", CAPTURE_VERIFY_DELAY_MS);
+}
+
+function scheduleCaptureVerification(reason = "scheduled", delayMs = CAPTURE_VERIFY_REFRESH_MS) {
+  clearTimeout(capture.verifyTimer);
+  capture.verifyTimer = setTimeout(() => {
+    capture.verifyTimer = null;
+    void verifyCaptureSource(reason);
+  }, Math.max(0, Number(delayMs) || 0));
+}
+
+function sampleDrawable(source) {
+  const canvas = document.createElement("canvas");
+  canvas.width = CAPTURE_VERIFY_SAMPLE_W;
+  canvas.height = CAPTURE_VERIFY_SAMPLE_H;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return null;
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const values = [];
+  for (let index = 0; index < pixels.length; index += 4) {
+    values.push(pixels[index], pixels[index + 1], pixels[index + 2]);
+  }
+  return values;
+}
+
+async function drawableFromBlob(blob) {
+  if (typeof createImageBitmap === "function") {
+    return createImageBitmap(blob);
+  }
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.addEventListener("load", () => resolve(image), { once: true });
+    image.addEventListener("error", () => reject(new Error("Reference image failed to load.")), { once: true });
+    image.src = URL.createObjectURL(blob);
+  });
+}
+
+async function fingerprintReference(monitorId) {
+  const response = await fetch(`/api/capture-reference?monitor=${encodeURIComponent(monitorId)}&_=${Date.now()}`, {
+    headers: { "x-host-key": hostKey }
+  });
+  if (!response.ok) throw new Error(`Reference ${monitorId} failed with ${response.status}.`);
+  const blob = await response.blob();
+  const drawable = await drawableFromBlob(blob);
+  try {
+    return sampleDrawable(drawable);
+  } finally {
+    if (typeof drawable.close === "function") drawable.close();
+    if (drawable instanceof HTMLImageElement && drawable.src?.startsWith("blob:")) URL.revokeObjectURL(drawable.src);
+  }
+}
+
+function compareFingerprints(a = [], b = []) {
+  const length = Math.min(a.length, b.length);
+  if (!length) return 0;
+  let diff = 0;
+  for (let index = 0; index < length; index += 1) {
+    diff += Math.abs(Number(a[index] || 0) - Number(b[index] || 0));
+  }
+  const score = 1 - diff / (length * 255);
+  return Math.max(0, Math.min(1, Math.round(score * 10000) / 10000));
+}
+
+async function verifyCaptureSource(reason = "manual") {
+  if (!capture.stream || capture.verifying) return false;
+  const track = capture.stream.getVideoTracks()[0];
+  if (!track || track.readyState === "ended") return false;
+  if (!el.preview.videoWidth || !el.preview.videoHeight || el.preview.readyState < 2) {
+    scheduleCaptureVerification(`${reason}-waiting-video`, CAPTURE_VERIFY_RETRY_MS);
+    return false;
+  }
+  capture.verifying = true;
+  try {
+    const liveFingerprint = sampleDrawable(el.preview);
+    if (!liveFingerprint) throw new Error("Live video fingerprint could not be sampled.");
+    const hostState = await fetch(`/api/host?key=${encodeURIComponent(hostKey)}&_=${Date.now()}`).then((response) => response.json());
+    const monitors = Array.isArray(hostState.monitors) ? hostState.monitors.filter((monitor) => monitor?.id) : [];
+    const results = [];
+    for (const monitor of monitors) {
+      try {
+        const reference = await fingerprintReference(monitor.id);
+        results.push({
+          monitorId: monitor.id,
+          sourceId: monitor.sourceId || "",
+          name: monitor.name || monitor.id,
+          score: compareFingerprints(liveFingerprint, reference)
+        });
+      } catch (error) {
+        results.push({
+          monitorId: monitor.id,
+          sourceId: monitor.sourceId || "",
+          name: monitor.name || monitor.id,
+          score: 0,
+          error: error.message
+        });
+      }
+    }
+    results.sort((a, b) => b.score - a.score);
+    const best = results[0] || null;
+    const runnerUp = results[1] || null;
+    const gap = best && runnerUp ? best.score - runnerUp.score : best ? best.score : 0;
+    let status = "failed";
+    let actualMonitorId = best?.monitorId || "";
+    let verifyReason = "No monitor reference could be compared.";
+    if (best && best.score >= CAPTURE_VERIFY_MATCH_SCORE && gap >= CAPTURE_VERIFY_AMBIGUOUS_GAP) {
+      status = best.monitorId === requestedMonitor ? "matched" : "mismatch";
+      verifyReason = status === "matched"
+        ? `Video fingerprint matches ${requestedMonitor}.`
+        : `Video fingerprint matched ${best.monitorId} while ${requestedMonitor} was requested.`;
+    } else if (best) {
+      status = "ambiguous";
+      verifyReason = `Best visual match was ${best.monitorId}, but the score gap was too small.`;
+    }
+    capture.verification = {
+      status,
+      requestedMonitor,
+      requestedSource,
+      actualMonitorId,
+      score: best?.score || 0,
+      runnerUpMonitorId: runnerUp?.monitorId || "",
+      runnerUpScore: runnerUp?.score || 0,
+      comparedAt: Date.now(),
+      reason: verifyReason
+    };
+    sendRtc("rtc.status", currentCaptureMeta());
+    if (status === "mismatch" || status === "ambiguous" || status === "failed") {
+      scheduleCaptureVerification(status, status === "mismatch" ? CAPTURE_VERIFY_REFRESH_MS : CAPTURE_VERIFY_RETRY_MS);
+    }
+    return status === "matched";
+  } catch (error) {
+    capture.verification = {
+      status: "failed",
+      requestedMonitor,
+      requestedSource,
+      actualMonitorId: "",
+      score: 0,
+      runnerUpMonitorId: "",
+      runnerUpScore: 0,
+      comparedAt: Date.now(),
+      reason,
+      error: error.message
+    };
+    sendRtc("rtc.status", currentCaptureMeta());
+    scheduleCaptureVerification("failed", CAPTURE_VERIFY_RETRY_MS);
+    return false;
+  } finally {
+    capture.verifying = false;
+  }
 }
 
 function startStatsTimer() {
@@ -192,9 +352,14 @@ async function startCapture() {
         frameRate: { ideal: 45, max: 60 },
         cursor: "always"
       },
-      audio: DISPLAY_OUTPUT_AUDIO
+      audio: DISPLAY_OUTPUT_AUDIO,
+      monitorTypeSurfaces: "include",
+      preferCurrentTab: false,
+      selfBrowserSurface: "exclude",
+      surfaceSwitching: "exclude"
     });
     capture.stream = stream;
+    capture.verification = null;
     for (const track of stream.getVideoTracks()) {
       try {
         track.contentHint = "motion";
@@ -213,6 +378,7 @@ async function startCapture() {
     hideCaptureWindowSoon("capture-sharing");
     connectSignal();
     sendRtc("rtc.ready", currentCaptureMeta());
+    scheduleCaptureVerification("capture-started", CAPTURE_VERIFY_DELAY_MS);
     if (capture.phoneReady) await makeOffer();
   } catch (error) {
     const denied = /denied|permission|not allowed/i.test(error.message || "");
@@ -242,6 +408,10 @@ function stopCapture(reason = "manual") {
   sendRtc("rtc.stop", { reason });
   closePeer();
   stopStatsTimer();
+  clearTimeout(capture.verifyTimer);
+  capture.verifyTimer = null;
+  capture.verification = null;
+  capture.verifying = false;
   for (const track of capture.stream?.getTracks?.() || []) track.stop();
   capture.stream = null;
   capture.startedAt = 0;

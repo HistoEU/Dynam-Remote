@@ -202,6 +202,15 @@ async function main() {
   const initialHost = await api(`/api/host?key=${encodeURIComponent(hostKey)}`);
   assert.equal(initialHost.monitors.length >= 1, true);
   assert.ok(initialHost.settings);
+  const referenceMonitorId = initialHost.monitors[0].id;
+  const referenceResponse = await fetch(`${baseUrl}/api/capture-reference?monitor=${encodeURIComponent(referenceMonitorId)}`, {
+    headers: { "x-host-key": hostKey }
+  });
+  assert.equal(referenceResponse.ok, true);
+  assert.match(referenceResponse.headers.get("content-type") || "", /^image\/jpeg\b/);
+  assert.equal(referenceResponse.headers.get("x-capture-monitor-id"), referenceMonitorId);
+  const referenceBytes = await referenceResponse.arrayBuffer();
+  assert.equal(referenceBytes.byteLength > 1000, true);
   const dryRunMode = await api("/api/input-mode", {
     method: "POST",
     headers: { "x-host-key": hostKey },

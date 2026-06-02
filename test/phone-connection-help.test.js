@@ -1266,7 +1266,7 @@ test("phone normalizes scaled stream-frame cursor metadata before drawing", asyn
   }
 });
 
-test("phone monitor selection resets stale zoom, cursor, and frame state", async () => {
+test("phone monitor selection resets stale zoom and cursor without blanking the last frame", async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({
@@ -1346,14 +1346,15 @@ test("phone monitor selection resets stale zoom, cursor, and frame state", async
     assert.equal(result.zoom, 1);
     assert.equal(result.panX, 0);
     assert.equal(result.panY, 0);
-    assert.equal(result.frame, null);
+    assert.equal(result.frame.frameId, 77);
+    assert.equal(result.frame.monitorId, "display-1");
     assert.equal(result.cursorMap, null);
     assert.equal(result.lensBox, null);
     assert.equal(result.touchpadX, 0.5);
     assert.equal(result.touchpadY, 0.5);
     assert.equal(result.sent.some((item) => item.type === "monitor.select" && item.payload.monitorId === "display-2"), true);
     assert.equal(result.debugMonitor, "display-2");
-    assert.equal(result.debugFrame, null);
+    assert.deepEqual(result.debugFrame, { width: 2560, height: 1440 });
   } finally {
     await browser.close();
   }

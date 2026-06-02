@@ -102,6 +102,22 @@ function cleanNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function cleanVerification(value = {}) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    status: cleanString(value.status, "", 40),
+    requestedMonitor: cleanString(value.requestedMonitor, "", 80),
+    requestedSource: cleanString(value.requestedSource, "", 120),
+    actualMonitorId: cleanString(value.actualMonitorId, "", 80),
+    score: cleanNumber(value.score),
+    runnerUpMonitorId: cleanString(value.runnerUpMonitorId, "", 80),
+    runnerUpScore: cleanNumber(value.runnerUpScore),
+    comparedAt: cleanNumber(value.comparedAt),
+    reason: cleanString(value.reason, "", 180),
+    error: cleanString(value.error, "", 160)
+  };
+}
+
 function monitorSummary(monitor = null) {
   if (!monitor) return null;
   return {
@@ -163,6 +179,8 @@ function createCaptureDiagnostics({
   const launchMonitorId = cleanString(captureLaunch.monitorId || selectedMonitorId, "", 80);
   const reportedMonitorId = cleanString(captureMeta?.requestedMonitor || "", "", 80);
   const reportedMonitor = findMonitor(safeMonitors, reportedMonitorId);
+  const verification = cleanVerification(captureMeta?.verification);
+  const verifiedMonitor = findMonitor(safeMonitors, verification?.actualMonitorId || "");
   const actualSize = {
     width: Math.max(0, cleanNumber(captureMeta?.width)),
     height: Math.max(0, cleanNumber(captureMeta?.height))
@@ -188,6 +206,9 @@ function createCaptureDiagnostics({
   if (captureMeta?.sharing && captureSizeMismatches(expectedSize, actualSize)) {
     divergence.push("capture-size-mismatch");
   }
+  if (verification?.status === "mismatch") divergence.push("capture-fingerprint-mismatch");
+  if (verification?.status === "ambiguous") divergence.push("capture-fingerprint-ambiguous");
+  if (verification?.status === "failed") divergence.push("capture-fingerprint-unavailable");
   if (stale) divergence.push("stale-rtc-host");
   if (selectedMonitor?.status && selectedMonitor.status !== "screen" && selectedMonitor.status !== "fake") {
     divergence.push("selected-monitor-disconnected");
@@ -215,9 +236,10 @@ function createCaptureDiagnostics({
       iceConnectionState: cleanString(captureMeta?.iceConnectionState, "", 40),
       firstFrameTimeMs: cleanNumber(captureMeta?.firstFrameTimeMs),
       fallbackReason: cleanString(captureMeta?.fallbackReason, "", 160),
+      verification,
       updatedAt
     },
-    phoneVisibleDisplay: monitorSummary(reportedMonitor || selectedMonitor),
+    phoneVisibleDisplay: monitorSummary(verifiedMonitor || reportedMonitor || selectedMonitor),
     expectedSize,
     actualSize,
     correction: {

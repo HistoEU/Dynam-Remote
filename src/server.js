@@ -788,10 +788,27 @@ function maybeCorrectCaptureSource(reason = "capture-check", rtcState = rtcRoom?
   if (!host || !meta?.sharing) return false;
   const monitor = monitors.find((item) => item.id === selectedMonitorId);
   if (!monitor) return false;
+  const verification = meta.verification || {};
+  const verifiedStatus = String(verification.status || "");
+  const verifiedMonitorId = String(verification.actualMonitorId || "");
   const requestedMonitor = meta.requestedMonitor || "";
   const wrongRequestedMonitor = requestedMonitor && requestedMonitor !== selectedMonitorId;
   const wrongSize = captureSizeMismatch(meta, monitor);
-  if (!wrongRequestedMonitor) {
+  const verifiedWrongMonitor = verifiedStatus === "mismatch" && verifiedMonitorId && verifiedMonitorId !== selectedMonitorId;
+  if (verifiedStatus === "matched" && verifiedMonitorId === selectedMonitorId) {
+    captureSourceCorrectionCounts.set(selectedMonitorId, 0);
+    noteCaptureAutoDetect("verified", `Video fingerprint matches ${selectedMonitorId}.`);
+    return false;
+  }
+  if (verifiedStatus === "ambiguous") {
+    noteCaptureAutoDetect("ambiguous", `Video fingerprint could not confidently distinguish ${selectedMonitorId}.`);
+    return false;
+  }
+  if (verifiedStatus === "failed") {
+    noteCaptureAutoDetect("verification-failed", verification.error || "Video fingerprint check failed.");
+    if (!wrongRequestedMonitor && !wrongSize) return false;
+  }
+  if (!wrongRequestedMonitor && !verifiedWrongMonitor) {
     captureSourceCorrectionCounts.set(selectedMonitorId, 0);
     noteCaptureAutoDetect(wrongSize === true ? "size-mismatch" : "matched", wrongSize === true
       ? `Capture size ${meta.width}x${meta.height} does not match ${selectedMonitorId}; use the capture source controls if the phone shows the wrong display.`
@@ -800,7 +817,9 @@ function maybeCorrectCaptureSource(reason = "capture-check", rtcState = rtcRoom?
   }
   const nextSource = cycleCaptureSourceForMonitor(
     selectedMonitorId,
-    wrongRequestedMonitor ? `requested ${requestedMonitor || "unknown"} while selected ${selectedMonitorId}` : `size ${meta.width}x${meta.height} did not match selected monitor`
+    verifiedWrongMonitor
+      ? `fingerprint matched ${verifiedMonitorId} while selected ${selectedMonitorId}`
+      : (wrongRequestedMonitor ? `requested ${requestedMonitor || "unknown"} while selected ${selectedMonitorId}` : `size ${meta.width}x${meta.height} did not match selected monitor`)
   );
   if (!nextSource) return false;
   setTimeout(() => {
@@ -1033,6 +1052,32 @@ function handleApi(req, res) {
       return sendJson(res, 403, apiError("BAD_HOST_KEY", "Host key is required for this action."));
     }
     return sendJson(res, 200, getHostState());
+  }
+  if (req.method === "GET" && url.pathname === "/api/capture-reference") {
+    if (url.searchParams.get("key") !== hostKey && req.headers["x-host-key"] !== hostKey) {
+      return sendJson(res, 403, apiError("BAD_HOST_KEY", "Host key is required for this action."));
+    }
+    const monitorId = String(url.searchParams.get("monitor") || selectedMonitorId);
+    const monitor = capture.getMonitors().find((item) => item.id === monitorId);
+    if (!monitor) {
+      return sendJson(res, 404, apiError("BAD_MONITOR", "That monitor is not available."));
+    }
+    capture.createFrame({ frameId: 0, monitorId, quality: "fast", inputMode })
+      .then((frame) => {
+        const image = frame.payload?.imageBuffer;
+        if (!Buffer.isBuffer(image)) {
+          return sendJson(res, 503, apiError("CAPTURE_REFERENCE_UNAVAILABLE", "A screen image reference is not available yet."));
+        }
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "Content-Type": frame.payload.mimeType || "image/jpeg",
+          "Cache-Control": "no-store",
+          "X-Capture-Monitor-Id": frame.payload.monitorId || monitorId
+        });
+        res.end(image);
+      })
+      .catch((error) => sendJson(res, 500, apiError("CAPTURE_REFERENCE_FAILED", error.message)));
+    return;
   }
   if (req.method === "POST" && url.pathname === "/api/open-capture") {
     if (!requireHostKey(req, res)) return;

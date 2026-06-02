@@ -147,6 +147,68 @@ test("capture diagnostics flag stale RTC capture and manual correction status", 
   assert.equal(diagnostics.divergence.includes("selected-monitor-disconnected"), true);
 });
 
+test("capture diagnostics reports verified monitor mismatches from video fingerprints", () => {
+  const monitors = [
+    {
+      id: "display-1",
+      sourceId: "\\\\.\\DISPLAY1",
+      name: "Primary",
+      bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+      scaleFactor: 1,
+      status: "screen"
+    },
+    {
+      id: "display-2",
+      sourceId: "\\\\.\\DISPLAY2",
+      name: "External",
+      bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+      scaleFactor: 1,
+      status: "screen"
+    }
+  ];
+  const now = 300000;
+
+  const diagnostics = createCaptureDiagnostics({
+    monitors,
+    selectedMonitorId: "display-2",
+    rtcState: {
+      hostConnected: true,
+      host: {
+        capture: {
+          sharing: true,
+          requestedMonitor: "display-2",
+          requestedSource: "Screen 2",
+          reportedSource: "monitor",
+          width: 1920,
+          height: 1080,
+          updatedAt: now - 400,
+          verification: {
+            status: "mismatch",
+            requestedMonitor: "display-2",
+            actualMonitorId: "display-1",
+            score: 0.91,
+            runnerUpMonitorId: "display-2",
+            runnerUpScore: 0.54,
+            comparedAt: now - 450
+          }
+        }
+      }
+    },
+    captureLaunch: {
+      monitorId: "display-2",
+      captureSourceName: "Screen 2",
+      autoDetect: { status: "correcting", reason: "Fingerprint matched display-1.", checkedAt: now - 300 }
+    },
+    correctionCount: 1,
+    now
+  });
+
+  assert.equal(diagnostics.reportedCapture.verification.status, "mismatch");
+  assert.equal(diagnostics.reportedCapture.verification.actualMonitorId, "display-1");
+  assert.equal(diagnostics.phoneVisibleDisplay.id, "display-1");
+  assert.equal(diagnostics.divergence.includes("capture-fingerprint-mismatch"), true);
+});
+
 test("display normalization keeps identical-resolution monitors distinct", () => {
   const left = normalizeDisplay({ id: "\\\\.\\DISPLAY5", name: "\\\\.\\DISPLAY5", left: -1920, top: 0, width: 1920, height: 1080 }, 0);
   const right = normalizeDisplay({ id: "\\\\.\\DISPLAY6", name: "\\\\.\\DISPLAY6", left: 0, top: 0, width: 1920, height: 1080 }, 1);
