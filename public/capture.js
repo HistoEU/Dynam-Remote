@@ -444,7 +444,7 @@ async function startCapture() {
     capture.verification = null;
     for (const track of stream.getVideoTracks()) {
       try {
-        track.contentHint = "motion";
+        track.contentHint = "detail";
       } catch {}
     }
     el.preview.srcObject = stream;
@@ -510,16 +510,17 @@ function ensurePeer() {
   for (const track of capture.stream.getTracks()) {
     if (track.kind === "video") {
       try {
-        track.contentHint = "motion";
+        track.contentHint = "detail";
       } catch {}
     }
     const sender = pc.addTrack(track, capture.stream);
     if (track.kind !== "video") continue;
     try {
       const params = sender.getParameters();
-      params.degradationPreference = "maintain-framerate";
+      params.degradationPreference = "maintain-resolution";
       params.encodings = Array.isArray(params.encodings) && params.encodings.length ? params.encodings : [{}];
       params.encodings[0].maxFramerate = 60;
+      params.encodings[0].maxBitrate = 16_000_000;
       params.encodings[0].scaleResolutionDownBy = 1;
       sender.setParameters(params).catch(() => {});
     } catch {}

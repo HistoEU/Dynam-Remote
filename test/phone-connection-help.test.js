@@ -1851,6 +1851,143 @@ test("phone wide desktop mode follows the cursor into adjacent monitors without 
   }
 });
 
+test("phone virtual ultrawide FOV follows cursor across monitor seams without switching", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      const debug = window.__remoteControllerDebug;
+      const sent = [];
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      debug.state.connected = true;
+      debug.state.approved = true;
+      debug.state.ws = {
+        readyState: WebSocket.OPEN,
+        send(value) {
+          sent.push(JSON.parse(value));
+        }
+      };
+      debug.state.selectedMonitorId = "display-1";
+      debug.state.monitors = [
+        {
+          id: "display-1",
+          name: "Display 1",
+          bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape"
+        },
+        {
+          id: "display-2",
+          name: "Display 2",
+          bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape"
+        },
+        {
+          id: "display-3",
+          name: "Display 3",
+          bounds: { left: 3840, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 3840, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape"
+        }
+      ];
+
+      debug.setVirtualDesktopMode(true, { skipReconnect: true });
+      debug.updateRemoteCursorFromAck({
+        ackType: "pointer.move",
+        point: { x: 1960, y: 540, visible: true },
+        coordinateSpace: "logical-desktop"
+      });
+      const layout = debug.virtualDesktopLayout();
+      const viewport = debug.virtualViewportSourceRect({ width: 390, height: 844 });
+      const capturePool = sent.find((item) => item.type === "capture.pool");
+      const monitorSelect = sent.find((item) => item.type === "monitor.select");
+      return {
+        checkbox: document.getElementById("virtualDesktopMode").checked,
+        classEnabled: document.getElementById("controller").classList.contains("virtual-desktop"),
+        zoom: debug.state.viewportZoom,
+        layoutWidth: layout.width,
+        monitorXs: layout.monitors.map((item) => item.x),
+        cursor: debug.state.virtualCursor,
+        viewport,
+        capturePool,
+        monitorSelect
+      };
+    });
+
+    assert.equal(result.checkbox, true);
+    assert.equal(result.classEnabled, true);
+    assert.equal(result.layoutWidth, 5760);
+    assert.deepEqual(result.monitorXs, [0, 1920, 3840]);
+    assert.equal(result.cursor.monitorId, "display-2");
+    assert.ok(result.zoom >= 2.9);
+    assert.ok(result.viewport.sx < 1920);
+    assert.ok(result.viewport.sx + result.viewport.sw > 1920);
+    assert.equal(result.capturePool.payload.enabled, true);
+    assert.equal(result.capturePool.payload.reason, "virtual-desktop-enabled");
+    assert.equal(result.monitorSelect, undefined);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("phone virtual RTC keeps audio tracks from replacing screen video", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(async () => {
+      const debug = window.__remoteControllerDebug;
+      debug.state.virtualDesktopMode = true;
+      const peer = debug.ensureVirtualRtcPeer("display-audio-guard");
+      const canvas = document.createElement("canvas");
+      canvas.width = 16;
+      canvas.height = 9;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#f1d36b";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const videoTrack = canvas.captureStream(1).getVideoTracks()[0];
+      peer.pc.ontrack({ track: videoTrack });
+      const before = peer.video.srcObject;
+
+      const audioContext = new AudioContext();
+      const audioDestination = audioContext.createMediaStreamDestination();
+      const audioTrack = audioDestination.stream.getAudioTracks()[0];
+      peer.pc.ontrack({ track: audioTrack });
+      const after = peer.video.srcObject;
+
+      videoTrack.stop();
+      audioTrack.stop();
+      await audioContext.close();
+      debug.closeVirtualRtcPeer("display-audio-guard", "test-cleanup");
+      return {
+        sameStream: before === after,
+        videoTracks: after?.getVideoTracks?.().length || 0,
+        audioTracks: after?.getAudioTracks?.().length || 0
+      };
+    });
+
+    assert.equal(result.sameStream, true);
+    assert.equal(result.videoTracks, 1);
+    assert.equal(result.audioTracks, 0);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("phone ignores stale stream frames from the previous monitor after a display switch", async () => {
   const browser = await chromium.launch();
   try {

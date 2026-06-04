@@ -28,14 +28,15 @@ test("protocol messages are versioned and validated", () => {
   assert.equal(validateClientMessage(makeMessage("pasteText", { text: "hello" }, { sequence: 5, timestamp: now }), { now }).ok, true);
   assert.equal(validateClientMessage(makeMessage("stream.visibility", { visible: false }, { sequence: 6, timestamp: now }), { now }).ok, true);
   assert.equal(validateClientMessage(makeMessage("acceptance.mark", { marker: "manual-phone-proof" }, { sequence: 7, timestamp: now }), { now }).ok, true);
+  assert.equal(validateClientMessage(makeMessage("capture.pool", { enabled: true, reason: "virtual-desktop" }, { sequence: 8, timestamp: now }), { now }).ok, true);
   assert.equal(validateClientMessage({ ...msg, protocolVersion: 99 }).code, "BAD_PROTOCOL_VERSION");
   assert.equal(validateClientMessage({ ...msg, type: "bad" }).code, "BAD_TYPE");
-  assert.equal(validateClientMessage(makeMessage("hello", {}, { sequence: 8, timestamp: now }), { now }).code, "BAD_CLIENT_TYPE");
+  assert.equal(validateClientMessage(makeMessage("hello", {}, { sequence: 9, timestamp: now }), { now }).code, "BAD_CLIENT_TYPE");
   assert.equal(validateClientMessage(makeMessage("pointer.move", {}, { timestamp: now }), { now }).code, "BAD_SEQUENCE");
   assert.equal(validateClientMessage(makeMessage("pointer.move", {}, { sequence: 1, timestamp: now }), { now, lastSequence: 1 }).code, "STALE_SEQUENCE");
-  assert.equal(validateClientMessage(makeMessage("pointer.move", {}, { sequence: 9, timestamp: now - 61000 }), { now }).code, "STALE_TIMESTAMP");
-  assert.equal(validateClientMessage(makeMessage("pointer.move", {}, { sequence: 10, timestamp: now + 11000 }), { now }).code, "FUTURE_TIMESTAMP");
-  assert.equal(validateClientMessage(makeMessage("pointer.move", [], { sequence: 11, timestamp: now }), { now }).code, "BAD_PAYLOAD");
+  assert.equal(validateClientMessage(makeMessage("pointer.move", {}, { sequence: 10, timestamp: now - 61000 }), { now }).code, "STALE_TIMESTAMP");
+  assert.equal(validateClientMessage(makeMessage("pointer.move", {}, { sequence: 11, timestamp: now + 11000 }), { now }).code, "FUTURE_TIMESTAMP");
+  assert.equal(validateClientMessage(makeMessage("pointer.move", [], { sequence: 12, timestamp: now }), { now }).code, "BAD_PAYLOAD");
 });
 
 test("protocol error envelopes include recoverability and next action guidance", () => {

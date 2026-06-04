@@ -1863,6 +1863,41 @@ async function handleClientMessage(client, raw) {
     sendWsJson(client.socket, makeError("BAD_MONITOR", "That monitor is not available."));
     return;
   }
+  if (message.type === "capture.pool") {
+    const reason = cleanText(payload.reason, "phone-capture-pool", 80) || "phone-capture-pool";
+    let results = [];
+    try {
+      if (payload.enabled === false) {
+        results = [];
+      } else {
+        results = ensureCapturePoolBrowsers(reason);
+      }
+      log("host.capture.poolRequested", {
+        sessionId: client.session.id,
+        reason,
+        enabled: payload.enabled !== false,
+        monitors: capture.getMonitors().length,
+        launches: results.length
+      });
+      sendWsJson(client.socket, makeMessage("ack", ackPayload(message, {
+        capturePool: capturePool ? capturePool.publicState() : { slots: [] },
+        launchResults: results.map((item) => ({
+          ok: Boolean(item.ok),
+          monitorId: item.monitorId || "",
+          launched: Boolean(item.launched),
+          alreadyOpen: Boolean(item.alreadyOpen),
+          launchScheduled: Boolean(item.launchScheduled),
+          launchInProgress: Boolean(item.launchInProgress),
+          mode: item.mode || ""
+        }))
+      })));
+      scheduleStateBroadcast({ immediate: true });
+    } catch (error) {
+      log("host.capture.poolRequestFailed", { sessionId: client.session.id, reason, error: error.message });
+      sendWsJson(client.socket, makeError("CAPTURE_POOL_FAILED", "Could not start all display streams.", error.message));
+    }
+    return;
+  }
   if (message.type === "capture.source") {
     const monitorId = String(payload.monitorId || selectedMonitorId);
     const sourceName = String(payload.sourceName || "").trim();

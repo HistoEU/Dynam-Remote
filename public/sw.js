@@ -1,6 +1,6 @@
 ﻿"use strict";
 
-const CACHE_NAME = "remote-controller-shell-v89";
+const CACHE_NAME = "remote-controller-shell-v97";
 const SHELL_ASSETS = [
   "/",
   "/index.html",

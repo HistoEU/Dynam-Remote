@@ -8,6 +8,7 @@ const MESSAGE_TYPES = new Set([
   "stream.frame",
   "stream.setQuality",
   "stream.visibility",
+  "capture.pool",
   "capture.source",
   "acceptance.mark",
   "pointer.move",
@@ -32,6 +33,7 @@ const MESSAGE_TYPES = new Set([
 const CLIENT_MESSAGE_TYPES = new Set([
   "stream.setQuality",
   "stream.visibility",
+  "capture.pool",
   "acceptance.mark",
   "pointer.move",
   "pointer.click",

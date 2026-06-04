@@ -19,6 +19,7 @@ const RTC_HEARTBEAT_MS = 2500;
 const RTC_RECONNECT_MS = 1200;
 const RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS = 650;
 const RTC_MONITOR_SWITCH_RECONNECT_DELAY_MS = 900;
+const VIRTUAL_RTC_DRAWABLE_GRACE_MS = 18000;
 const PENDING_MONITOR_SELECTION_MS = 4500;
 const TOUCHPAD_VIRTUAL_GAIN = 1.34;
 const TOUCHPAD_HINT_GAIN = 0.18;
@@ -131,6 +132,8 @@ const state = {
   rtcVideoWidth: 0,
   rtcVideoHeight: 0,
   rtcIceQueue: [],
+  rtcPeers: new Map(),
+  rtcMultiActive: false,
   rtcReceiverEnabled: readRtcReceiverDefault(),
   connected: false,
   approved: false,
@@ -155,6 +158,10 @@ const state = {
   cursorLensZoom: Number(localStorage.getItem("remote-cursor-lens-zoom") || 1.7),
   cursorLensSize: Number(localStorage.getItem("remote-cursor-lens-size") || 1),
   wideDesktopMode: localStorage.getItem("remote-wide-desktop-mode") === "1",
+  virtualDesktopMode: localStorage.getItem("remote-virtual-desktop-mode") === "1",
+  virtualCursor: null,
+  virtualDesktopLastFollowAt: 0,
+  virtualDesktopPaintTimer: null,
   cursorLensActiveUntil: 0,
   cursorLensHoldTimer: null,
   followPausedUntil: 0,
@@ -328,6 +335,7 @@ const el = {
   cursorLensEnabled: document.getElementById("cursorLensEnabled"),
   cursorLensHold: document.getElementById("cursorLensHold"),
   wideDesktopMode: document.getElementById("wideDesktopMode"),
+  virtualDesktopMode: document.getElementById("virtualDesktopMode"),
   showHalo: document.getElementById("showHalo"),
   hapticsEnabled: document.getElementById("hapticsEnabled"),
   calibrationToggleBtn: document.getElementById("calibrationToggleBtn"),
@@ -628,13 +636,13 @@ function flushPointerMove() {
 }
 
 function send(type, payload = {}) {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return false;
   if (type === "pointer.move") {
     queuePointerMove(payload);
-    return;
+    return true;
   }
   flushPointerMove();
-  sendNow(type, payload);
+  return sendNow(type, payload);
 }
 
 function approximateFps() {
@@ -1088,16 +1096,60 @@ function connectWebSocket() {
   });
 }
 
-function sendRtc(type, payload = {}) {
+function sendRtc(type, payload = {}, extra = {}) {
   if (!state.rtcWs || state.rtcWs.readyState !== WebSocket.OPEN) return false;
   state.rtcWs.send(JSON.stringify({
     protocol: "remote-controller-rtc",
     version: 1,
     type,
     at: Date.now(),
+    ...extra,
     payload
   }));
   return true;
+}
+
+function rtcReadyPayload() {
+  return state.virtualDesktopMode
+    ? { wants: "all-screen-video", mode: "virtual-desktop", allMonitors: true }
+    : { wants: "screen-video" };
+}
+
+function virtualRtcPeerDrawable(peer) {
+  const video = peer?.video || null;
+  const width = Number(video?.videoWidth || peer?.videoWidth || 0);
+  const height = Number(video?.videoHeight || peer?.videoHeight || 0);
+  const drawable = Boolean(video && video.readyState >= 2 && width > 0 && height > 0);
+  if (drawable) peer.lastDrawableAt = performance.now();
+  return drawable;
+}
+
+function virtualRtcPeerNeedsRetry(peer, now = performance.now()) {
+  if (!peer) return true;
+  if (virtualRtcPeerDrawable(peer)) return false;
+  const startedAt = Number(peer.trackReceivedAt || peer.createdAt || now);
+  const hasAnyConnection = Boolean(peer.stream || peer.ready || peer.pc?.connectionState === "connected");
+  if (!hasAnyConnection) return true;
+  return now - startedAt >= VIRTUAL_RTC_DRAWABLE_GRACE_MS;
+}
+
+function missingVirtualRtcMonitorIds() {
+  if (!state.virtualDesktopMode) return [];
+  const now = performance.now();
+  return state.monitors
+    .map((monitor) => monitor.id)
+    .filter((monitorId) => {
+      const peer = state.rtcPeers.get(monitorId);
+      return virtualRtcPeerNeedsRetry(peer, now);
+    });
+}
+
+function requestCapturePool(reason = "virtual-desktop") {
+  if (!state.connected || !state.approved) return false;
+  return Boolean(send("capture.pool", {
+    enabled: state.virtualDesktopMode,
+    reason
+  }));
 }
 
 function suppressRtcReconnect(reason = "manual", durationMs = RTC_MONITOR_SWITCH_RECONNECT_SUPPRESS_MS) {
@@ -1133,7 +1185,8 @@ function connectRtcReceiver() {
   state.rtcWs.addEventListener("open", () => {
     state.rtcConnected = true;
     state.rtcStatus = "waiting";
-    sendRtc("rtc.ready", { wants: "screen-video" });
+    sendRtc("rtc.ready", rtcReadyPayload());
+    if (state.virtualDesktopMode) requestCapturePool("virtual-desktop-rtc-open");
     updateDiagnostics();
   });
   state.rtcWs.addEventListener("message", (event) => {
@@ -1143,6 +1196,7 @@ function connectRtcReceiver() {
     state.rtcConnected = false;
     setRtcVideoActive(false, "rtc-socket-closed");
     closeRtcPeer();
+    closeVirtualRtcPeers("rtc-socket-closed");
     if (!state.manualDisconnect && state.connected && !rtcReconnectSuppressed()) {
       scheduleRtcReconnect("rtc-socket-closed", RTC_RECONNECT_MS);
     }
@@ -1181,6 +1235,220 @@ function closeRtcPeer() {
   state.rtcIceQueue = [];
 }
 
+function createVirtualRtcVideo(monitorId) {
+  const video = document.createElement("video");
+  video.autoplay = true;
+  video.playsInline = true;
+  video.muted = true;
+  video.preload = "auto";
+  video.disablePictureInPicture = true;
+  video.setAttribute("aria-hidden", "true");
+  video.tabIndex = -1;
+  video.dataset.monitorId = monitorId;
+  video.className = "rtc-video virtual-rtc-video";
+  video.style.position = "fixed";
+  video.style.left = "0";
+  video.style.top = "0";
+  video.style.width = "2px";
+  video.style.height = "2px";
+  video.style.opacity = "0.001";
+  video.style.pointerEvents = "none";
+  video.style.zIndex = "0";
+  video.style.objectFit = "cover";
+  video.style.contain = "strict";
+  video.style.transform = "translate3d(0, 0, 0)";
+  video.addEventListener("loadedmetadata", () => {
+    const peer = state.rtcPeers.get(monitorId);
+    if (!peer) return;
+    peer.videoWidth = video.videoWidth || peer.videoWidth || 0;
+    peer.videoHeight = video.videoHeight || peer.videoHeight || 0;
+    peer.ready = true;
+    peer.lastDrawableAt = performance.now();
+    updateVirtualRtcActive("metadata");
+  });
+  document.body.appendChild(video);
+  return video;
+}
+
+function virtualRtcPeer(monitorId) {
+  return state.rtcPeers.get(monitorId) || null;
+}
+
+function closeVirtualRtcPeer(monitorId, reason = "closed") {
+  const peer = state.rtcPeers.get(monitorId);
+  if (!peer) return false;
+  if (peer.pc) {
+    peer.pc.ontrack = null;
+    peer.pc.onicecandidate = null;
+    peer.pc.onconnectionstatechange = null;
+    peer.pc.close();
+  }
+  if (peer.video) {
+    peer.video.pause?.();
+    peer.video.srcObject = null;
+    peer.video.remove?.();
+  }
+  state.rtcPeers.delete(monitorId);
+  updateVirtualRtcActive(reason);
+  return true;
+}
+
+function closeVirtualRtcPeers(reason = "closed") {
+  for (const monitorId of [...state.rtcPeers.keys()]) {
+    closeVirtualRtcPeer(monitorId, reason);
+  }
+  state.rtcPeers.clear();
+  updateVirtualRtcActive(reason);
+}
+
+function updateVirtualRtcActive(reason = "") {
+  const peers = [...state.rtcPeers.values()];
+  const active = peers.some((peer) => peer.stream || peer.ready || peer.pc?.connectionState === "connected");
+  state.rtcMultiActive = active;
+  if (state.virtualDesktopMode) {
+    state.rtcActive = active;
+    el.controller?.classList.toggle("rtc-active", active);
+    el.controller?.classList.toggle("rtc-fallback", !active);
+    setScreenshotFallbackVisible(!active, active ? `virtual-rtc-${reason || "active"}` : `virtual-rtc-${reason || "waiting"}`);
+    state.rtcStatus = active ? `virtual:${peers.filter((peer) => peer.stream || peer.ready).length}` : "virtual-waiting";
+    drawFrame();
+    scheduleVirtualDesktopPaint();
+  }
+  updateDiagnostics();
+  return active;
+}
+
+function stopVirtualDesktopPaint() {
+  if (!state.virtualDesktopPaintTimer) return;
+  if (typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(state.virtualDesktopPaintTimer);
+  } else {
+    clearTimeout(state.virtualDesktopPaintTimer);
+  }
+  state.virtualDesktopPaintTimer = null;
+}
+
+function scheduleVirtualDesktopPaint() {
+  if (!state.virtualDesktopMode || state.virtualDesktopPaintTimer) return false;
+  const tick = () => {
+    state.virtualDesktopPaintTimer = null;
+    if (!state.virtualDesktopMode) return;
+    drawFrame();
+    if (state.rtcPeers.size > 0 || state.rtcMultiActive) {
+      scheduleVirtualDesktopPaint();
+    }
+  };
+  state.virtualDesktopPaintTimer = typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(tick)
+    : setTimeout(tick, 16);
+  return true;
+}
+
+function hasVideoTrackSize(track) {
+  const settings = track?.getSettings?.() || {};
+  return Number(settings.width || 0) > 0 && Number(settings.height || 0) > 0;
+}
+
+function singleTrackStream(track) {
+  return new MediaStream([track]);
+}
+
+function ensureVirtualRtcPeer(monitorId) {
+  const safeMonitorId = String(monitorId || "").trim();
+  if (!safeMonitorId) return null;
+  const existing = state.rtcPeers.get(safeMonitorId);
+  if (existing?.pc) return existing;
+  const pc = new RTCPeerConnection({ iceServers: [] });
+  const peer = {
+    monitorId: safeMonitorId,
+    pc,
+    stream: null,
+    video: createVirtualRtcVideo(safeMonitorId),
+    videoWidth: 0,
+    videoHeight: 0,
+    iceQueue: [],
+    ready: false,
+    status: "new",
+    createdAt: performance.now(),
+    trackReceivedAt: 0,
+    lastDrawableAt: 0
+  };
+  pc.ontrack = (event) => {
+    const track = event.track;
+    if (track?.kind !== "video") return;
+    const settings = track?.getSettings?.() || {};
+    const incomingHasSize = hasVideoTrackSize(track);
+    if (!incomingHasSize && peer.stream && (peer.videoWidth || peer.video?.videoWidth)) return;
+    const stream = singleTrackStream(track);
+    peer.stream = stream;
+    peer.trackReceivedAt = performance.now();
+    peer.videoWidth = Number(settings.width || peer.videoWidth || 0);
+    peer.videoHeight = Number(settings.height || peer.videoHeight || 0);
+    peer.video.srcObject = stream;
+    const playVideo = () => peer.video.play?.().catch(() => {});
+    playVideo();
+    if (track?.addEventListener) {
+      track.addEventListener("unmute", playVideo, { once: true });
+    }
+    peer.ready = true;
+    updateVirtualRtcActive("track");
+  };
+  pc.onicecandidate = (event) => {
+    sendRtc("rtc.ice", { candidate: event.candidate ? event.candidate.toJSON() : null }, { toMonitorId: safeMonitorId });
+  };
+  pc.onconnectionstatechange = () => {
+    peer.status = pc.connectionState;
+    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+      peer.ready = false;
+    }
+    updateVirtualRtcActive(pc.connectionState);
+  };
+  state.rtcPeers.set(safeMonitorId, peer);
+  return peer;
+}
+
+async function flushVirtualRtcIceQueue(peer) {
+  if (!peer?.pc?.remoteDescription) return;
+  const queued = peer.iceQueue.splice(0);
+  for (const candidate of queued) {
+    await peer.pc.addIceCandidate(candidate ? new RTCIceCandidate(candidate) : null);
+  }
+}
+
+async function handleVirtualRtcOffer(message = {}) {
+  const monitorId = String(message.fromMonitorId || message.payload?.monitorId || "").trim();
+  if (!monitorId) return;
+  const peer = ensureVirtualRtcPeer(monitorId);
+  if (!peer) return;
+  const run = async () => {
+    let currentPeer = state.rtcPeers.get(monitorId) || ensureVirtualRtcPeer(monitorId);
+    if (!currentPeer?.pc) return;
+    if (!["stable", "have-remote-offer"].includes(currentPeer.pc.signalingState)) {
+      closeVirtualRtcPeer(monitorId, "offer-race-reset");
+      currentPeer = ensureVirtualRtcPeer(monitorId);
+    }
+    state.rtcStatus = `negotiating:${monitorId}`;
+    await currentPeer.pc.setRemoteDescription(new RTCSessionDescription(message.payload));
+    await flushVirtualRtcIceQueue(currentPeer);
+    if (currentPeer.pc.signalingState !== "have-remote-offer") return;
+    const answer = await currentPeer.pc.createAnswer();
+    await currentPeer.pc.setLocalDescription(answer);
+    sendRtc("rtc.answer", currentPeer.pc.localDescription.toJSON(), { toMonitorId: monitorId });
+    updateVirtualRtcActive("offer");
+  };
+  const task = (peer.offerTask || Promise.resolve()).then(run);
+  peer.offerTask = task.catch((error) => {
+    state.lastError = {
+      code: "VIRTUAL_RTC_OFFER_FAILED",
+      friendly: `Could not answer ${monitorId} video offer.`,
+      detail: error.message,
+      recoverable: true
+    };
+    updateDiagnostics();
+  });
+  await peer.offerTask;
+}
+
 function closeRtcReceiver(reason = "manual", options = {}) {
   clearTimeout(state.rtcReconnectTimer);
   state.rtcReconnectTimer = null;
@@ -1196,6 +1464,7 @@ function closeRtcReceiver(reason = "manual", options = {}) {
   }
   state.rtcWs = null;
   state.rtcConnected = false;
+  if (!state.virtualDesktopMode) closeVirtualRtcPeers(reason);
   setRtcVideoActive(false, reason);
   if (options.reconnect && shouldUseRtcReceiver()) {
     scheduleRtcReconnect(reason, options.reconnectDelayMs || RTC_RECONNECT_MS);
@@ -1205,10 +1474,11 @@ function closeRtcReceiver(reason = "manual", options = {}) {
 function ensureRtcPeer() {
   if (state.rtcPc) return state.rtcPc;
   const pc = new RTCPeerConnection({ iceServers: [] });
-  pc.addTransceiver("video", { direction: "recvonly" });
-  pc.addTransceiver("audio", { direction: "recvonly" });
   pc.ontrack = (event) => {
-    const stream = event.streams[0] || new MediaStream([event.track]);
+    const track = event.track;
+    if (track?.kind !== "video") return;
+    if (!hasVideoTrackSize(track) && state.rtcRemoteStream && el.rtcVideo?.videoWidth) return;
+    const stream = singleTrackStream(track);
     state.rtcRemoteStream = stream;
     el.rtcVideo.srcObject = stream;
     el.rtcVideo.play?.().catch(() => {});
@@ -1246,11 +1516,16 @@ async function handleRtcSignal(raw) {
   }
   if (message.type === "rtc.hello" || message.type === "rtc.peerJoined" || message.type === "rtc.peerReady") {
     state.rtcStatus = message.payload?.room?.state || "waiting";
-    sendRtc("rtc.ready", { wants: "screen-video" });
+    sendRtc("rtc.ready", rtcReadyPayload());
+    if (state.virtualDesktopMode) requestCapturePool("virtual-desktop-peer");
     updateDiagnostics();
     return;
   }
   if (message.type === "rtc.offer") {
+    if (state.virtualDesktopMode) {
+      await handleVirtualRtcOffer(message);
+      return;
+    }
     const pc = ensureRtcPeer();
     state.rtcStatus = "negotiating";
     await pc.setRemoteDescription(new RTCSessionDescription(message.payload));
@@ -1263,6 +1538,17 @@ async function handleRtcSignal(raw) {
   }
   if (message.type === "rtc.ice") {
     const candidate = message.payload?.candidate ?? null;
+    if (state.virtualDesktopMode) {
+      const monitorId = String(message.fromMonitorId || message.payload?.monitorId || "").trim();
+      const peer = monitorId ? ensureVirtualRtcPeer(monitorId) : null;
+      if (!peer) return;
+      if (!peer.pc?.remoteDescription) {
+        peer.iceQueue.push(candidate);
+        return;
+      }
+      await peer.pc.addIceCandidate(candidate ? new RTCIceCandidate(candidate) : null);
+      return;
+    }
     if (!state.rtcPc?.remoteDescription) {
       state.rtcIceQueue.push(candidate);
       return;
@@ -1271,6 +1557,10 @@ async function handleRtcSignal(raw) {
     return;
   }
   if (message.type === "rtc.stop" || message.type === "rtc.peerLeft") {
+    if (state.virtualDesktopMode && message.fromMonitorId) {
+      closeVirtualRtcPeer(message.fromMonitorId, message.type);
+      return;
+    }
     state.rtcStatus = message.type === "rtc.peerLeft" ? "waiting" : "stopped";
     setRtcVideoActive(false, message.type);
     closeRtcPeer();
@@ -1285,6 +1575,10 @@ async function handleRtcSignal(raw) {
 }
 
 function setRtcVideoActive(active, reason = "") {
+  if (state.virtualDesktopMode) {
+    updateVirtualRtcActive(reason);
+    return;
+  }
   const videoReady = Boolean(el.rtcVideo?.srcObject);
   const next = Boolean(active && videoReady);
   if (state.rtcActive === next && reason !== "metadata") return;
@@ -1311,6 +1605,16 @@ el.rtcVideo?.addEventListener("loadedmetadata", () => {
 
 setInterval(() => {
   if (!state.rtcWs || state.rtcWs.readyState !== WebSocket.OPEN) return;
+  if (state.virtualDesktopMode) {
+    const missingMonitorIds = missingVirtualRtcMonitorIds();
+    if (missingMonitorIds.length) {
+      sendRtc("rtc.ready", {
+        ...rtcReadyPayload(),
+        missingMonitorIds
+      });
+      requestCapturePool("virtual-desktop-missing-stream");
+    }
+  }
   sendRtc("rtc.ping", {
     active: state.rtcActive,
     videoWidth: state.rtcVideoWidth,
@@ -1465,6 +1769,14 @@ function applyState(next) {
   el.qualityChip.textContent = next.streamStats?.quality || "balanced";
   const monitor = state.monitors.find((item) => item.id === state.selectedMonitorId);
   el.monitorName.textContent = monitor ? monitor.name : "Display";
+  if (state.virtualDesktopMode && state.monitors.length && !state.virtualCursor) {
+    initializeVirtualDesktopView({
+      keepZoom: state.viewportZoom > 1.01,
+      source: "state-sync"
+    });
+    requestCapturePool("virtual-desktop-state-sync");
+    scheduleVirtualDesktopPaint();
+  }
   renderMonitors();
   updateCalibrationUi();
   updateDiagnostics();
@@ -2366,6 +2678,11 @@ function rtcVideoFrame() {
 
 function updateRtcVideoViewport() {
   if (!el.rtcVideo) return;
+  if (state.virtualDesktopMode) {
+    el.rtcVideo.style.display = "none";
+    return;
+  }
+  el.rtcVideo.style.display = "";
   const rect = el.canvas?.getBoundingClientRect?.();
   if (!rect?.width || !rect?.height) return;
   const frame = rtcVideoFrame();
@@ -2395,6 +2712,7 @@ function normalizeCanvasPoint(point) {
 }
 
 function remoteCursorNormalized() {
+  if (state.virtualDesktopMode) return virtualCursorNormalized();
   const frame = displayFrameForCursor();
   const cursor = activeDisplayCursor(frame);
   if (!frame || !cursor || cursor.visible === false) return null;
@@ -2409,6 +2727,7 @@ function remoteCursorNormalized() {
 }
 
 function followViewportTowardCursor({ force = false, strength = 0.55, skipDraw = false } = {}) {
+  if (state.virtualDesktopMode) return followVirtualViewportTowardCursor({ force, strength, skipDraw });
   if (!state.autoFollowCursor) return false;
   if (state.viewportZoom <= 1.01) return false;
   if (!force && performance.now() < state.followPausedUntil) return false;
@@ -2436,6 +2755,7 @@ function followViewportTowardCursor({ force = false, strength = 0.55, skipDraw =
 }
 
 function forceViewportCenterOnCursor({ skipDraw = false } = {}) {
+  if (state.virtualDesktopMode) return followVirtualViewportTowardCursor({ force: true, strength: 1, skipDraw });
   if (state.viewportZoom <= 1.01) return false;
   if (!remoteCursorNormalized()) return false;
   const previousPause = state.followPausedUntil;
@@ -2485,11 +2805,165 @@ function monitorForDesktopPoint(point = {}, coordinateSpace = "logical-desktop")
   }) || null;
 }
 
+function virtualDesktopLayout(monitors = state.monitors, coordinateSpace = "logical-desktop") {
+  const items = (Array.isArray(monitors) ? monitors : [])
+    .map((monitor) => {
+      const bounds = monitorDesktopBounds(monitor, coordinateSpace);
+      if (!bounds) return null;
+      return {
+        id: monitor.id,
+        monitor,
+        left: Number(bounds.left || 0),
+        top: Number(bounds.top || 0),
+        width: Math.max(1, Number(bounds.width || 1)),
+        height: Math.max(1, Number(bounds.height || 1))
+      };
+    })
+    .filter(Boolean);
+  if (!items.length) {
+    const monitor = selectedMonitor();
+    const fallbackW = Math.max(1, Number(monitor?.bounds?.width || state.rtcVideoWidth || 1280));
+    const fallbackH = Math.max(1, Number(monitor?.bounds?.height || state.rtcVideoHeight || 720));
+    return {
+      coordinateSpace,
+      left: 0,
+      top: 0,
+      width: fallbackW,
+      height: fallbackH,
+      right: fallbackW,
+      bottom: fallbackH,
+      monitors: []
+    };
+  }
+  const left = Math.min(...items.map((item) => item.left));
+  const top = Math.min(...items.map((item) => item.top));
+  const right = Math.max(...items.map((item) => item.left + item.width));
+  const bottom = Math.max(...items.map((item) => item.top + item.height));
+  return {
+    coordinateSpace,
+    left,
+    top,
+    right,
+    bottom,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+    monitors: items.map((item) => ({
+      ...item,
+      x: item.left - left,
+      y: item.top - top,
+      right: item.left - left + item.width,
+      bottom: item.top - top + item.height
+    }))
+  };
+}
+
+function virtualMonitorRect(monitorId, layout = virtualDesktopLayout()) {
+  return layout.monitors.find((item) => item.id === monitorId) || layout.monitors[0] || null;
+}
+
+function virtualDefaultZoom(layout = virtualDesktopLayout()) {
+  const selectedRect = virtualMonitorRect(state.selectedMonitorId, layout);
+  if (!selectedRect) return 1;
+  return clamp(layout.width / Math.max(1, selectedRect.width), 1, DISPLAY_STAGE_MAX_ZOOM);
+}
+
+function virtualDesktopSourceMetrics(rect = el.canvas.getBoundingClientRect()) {
+  const layout = virtualDesktopLayout();
+  return {
+    layout,
+    metrics: displayStageMetricsForSource(layout.width, layout.height, rect)
+  };
+}
+
+function virtualViewportSourceRect(rect = el.canvas.getBoundingClientRect()) {
+  const { layout, metrics } = virtualDesktopSourceMetrics(rect);
+  const visibleLeft = Math.max(0, -metrics.dx);
+  const visibleTop = Math.max(0, -metrics.dy);
+  const visibleRight = Math.min(metrics.drawW, metrics.stageW - metrics.dx);
+  const visibleBottom = Math.min(metrics.drawH, metrics.stageH - metrics.dy);
+  return {
+    layout,
+    sx: clamp((visibleLeft / Math.max(1, metrics.drawW)) * layout.width, 0, layout.width),
+    sy: clamp((visibleTop / Math.max(1, metrics.drawH)) * layout.height, 0, layout.height),
+    sw: clamp(((visibleRight - visibleLeft) / Math.max(1, metrics.drawW)) * layout.width, 0, layout.width),
+    sh: clamp(((visibleBottom - visibleTop) / Math.max(1, metrics.drawH)) * layout.height, 0, layout.height)
+  };
+}
+
+function setVirtualCursorFromDesktopPoint(point = {}, coordinateSpace = "logical-desktop") {
+  const layout = virtualDesktopLayout(state.monitors, coordinateSpace === "physical-desktop" ? "physical-desktop" : "logical-desktop");
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const monitor = monitorForDesktopPoint(point, coordinateSpace);
+  state.virtualCursor = {
+    x: clamp(x - layout.left, 0, layout.width),
+    y: clamp(y - layout.top, 0, layout.height),
+    visible: point.visible !== false,
+    coordinateSpace: layout.coordinateSpace,
+    source: point.source || "ack",
+    monitorId: monitor?.id || "",
+    raw: { ...point, coordinateSpace },
+    at: performance.now()
+  };
+  return state.virtualCursor;
+}
+
+function virtualCursorNormalized() {
+  if (!state.virtualCursor || state.virtualCursor.visible === false) return null;
+  const layout = virtualDesktopLayout(state.monitors, state.virtualCursor.coordinateSpace || "logical-desktop");
+  return {
+    x: clamp(Number(state.virtualCursor.x || 0) / Math.max(1, layout.width), 0, 1),
+    y: clamp(Number(state.virtualCursor.y || 0) / Math.max(1, layout.height), 0, 1),
+    layout
+  };
+}
+
+function followVirtualViewportTowardCursor({ force = false, strength = 0.5, skipDraw = false } = {}) {
+  if (!state.virtualDesktopMode || !state.autoFollowCursor) return false;
+  if (!force && performance.now() < state.followPausedUntil) return false;
+  const cursor = virtualCursorNormalized();
+  if (!cursor) return false;
+  const layout = cursor.layout;
+  const rect = el.canvas.getBoundingClientRect();
+  const baseMetrics = sourceMetrics(layout.width, layout.height, rect);
+  const zoom = Math.max(1, Number(state.viewportZoom) || 1);
+  const visible = 1 / zoom;
+  const maxPanX = Math.max(0, 1 - visible);
+  const maxPanY = Math.max(0, 1 - visible);
+  const targetPanX = clamp(cursor.x - visible / 2, 0, maxPanX);
+  const targetPanY = clamp(cursor.y - visible / 2, 0, maxPanY);
+  const targetX = -targetPanX * baseMetrics.drawW * zoom;
+  const targetY = -targetPanY * baseMetrics.drawH * zoom;
+  const followStrength = force ? 1 : clamp(Number(strength) || 1, 0, 1);
+  const nextX = state.stagePanX + (targetX - state.stagePanX) * followStrength;
+  const nextY = state.stagePanY + (targetY - state.stagePanY) * followStrength;
+  if (Math.abs(nextX - state.stagePanX) < 0.5 && Math.abs(nextY - state.stagePanY) < 0.5) return false;
+  state.stagePanX = nextX;
+  state.stagePanY = nextY;
+  state.virtualDesktopLastFollowAt = performance.now();
+  clampStagePan(baseMetrics);
+  if (!skipDraw) drawFrame();
+  return true;
+}
+
 function updateRemoteCursorFromAck(ack = {}) {
   const point = ack.point;
-  const frame = displayFrameForCursor();
-  if (!frame || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return;
+  if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return;
   const coordinateSpace = ack.coordinateSpace || "logical-desktop";
+  if (state.virtualDesktopMode) {
+    const cursor = setVirtualCursorFromDesktopPoint({
+      ...point,
+      visible: true,
+      source: "ack"
+    }, coordinateSpace);
+    if (!cursor) return;
+    followVirtualViewportTowardCursor({ force: false, strength: 0.72, skipDraw: true });
+    drawFrame();
+    return;
+  }
+  const frame = displayFrameForCursor();
+  if (!frame) return;
   const wideMonitor = state.wideDesktopMode
     ? monitorForDesktopPoint(point, coordinateSpace)
     : null;
@@ -2885,6 +3359,68 @@ function drawRtcOverlay(frame, w, h) {
   el.latencyChip.textContent = state.rtcStatus === "connected" || state.rtcActive ? "RTC" : "wait";
 }
 
+function drawVirtualDesktopFrame(w, h) {
+  const layout = virtualDesktopLayout();
+  if (state.autoFollowCursor && state.virtualCursor) {
+    followVirtualViewportTowardCursor({ force: false, strength: 0.42, skipDraw: true });
+  }
+  const baseMetrics = sourceMetrics(layout.width, layout.height, { width: w, height: h });
+  clampStagePan(baseMetrics);
+  const metrics = displayStageMetricsForSource(layout.width, layout.height, { width: w, height: h });
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, w, h);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, w, h);
+  ctx.clip();
+  for (const item of layout.monitors) {
+    const peer = virtualRtcPeer(item.id);
+    const video = peer?.video || null;
+    const dx = metrics.dx + (item.x / layout.width) * metrics.drawW;
+    const dy = metrics.dy + (item.y / layout.height) * metrics.drawH;
+    const dw = (item.width / layout.width) * metrics.drawW;
+    const dh = (item.height / layout.height) * metrics.drawH;
+    const drawable = virtualRtcPeerDrawable(peer);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(dx, dy, dw, dh);
+    ctx.clip();
+    if (drawable) {
+      try {
+        ctx.drawImage(video, dx, dy, dw, dh);
+      } catch {
+        ctx.fillStyle = "#020202";
+        ctx.fillRect(dx, dy, dw, dh);
+      }
+    } else {
+      ctx.fillStyle = "#020202";
+      ctx.fillRect(dx, dy, dw, dh);
+      ctx.strokeStyle = "rgba(241, 211, 107, 0.22)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(dx + 0.5, dy + 0.5, Math.max(0, dw - 1), Math.max(0, dh - 1));
+    }
+    ctx.restore();
+  }
+  if (state.virtualCursor && state.virtualCursor.visible !== false) {
+    const cursorX = metrics.dx + (Number(state.virtualCursor.x || 0) / Math.max(1, layout.width)) * metrics.drawW;
+    const cursorY = metrics.dy + (Number(state.virtualCursor.y || 0) / Math.max(1, layout.height)) * metrics.drawH;
+    if (Number.isFinite(cursorX) && Number.isFinite(cursorY)) {
+      ctx.beginPath();
+      ctx.arc(cursorX, cursorY, 4.8, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(214, 168, 74, 0.96)";
+      ctx.shadowColor = "rgba(214, 168, 74, 0.34)";
+      ctx.shadowBlur = 8;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#fff3cf";
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  el.latencyChip.textContent = state.rtcMultiActive ? "RTC" : "wait";
+}
+
 function drawFrame() {
   const frame = state.frame;
   const dpr = window.devicePixelRatio || 1;
@@ -2892,6 +3428,11 @@ function drawFrame() {
   drawFrameShell(rect, dpr);
   const w = rect.width;
   const h = rect.height;
+  if (state.virtualDesktopMode) {
+    drawVirtualDesktopFrame(w, h);
+    state.lastCanvasPaintAt = performance.now();
+    return;
+  }
   if (state.rtcActive) {
     drawRtcOverlay(frame, w, h);
     state.lastCanvasPaintAt = performance.now();
@@ -3024,7 +3565,9 @@ function updatePreferenceUi() {
   if (el.autoFollowCursor) el.autoFollowCursor.checked = state.autoFollowCursor;
   if (el.cursorLensEnabled) el.cursorLensEnabled.checked = state.cursorLensEnabled;
   if (el.wideDesktopMode) el.wideDesktopMode.checked = state.wideDesktopMode;
+  if (el.virtualDesktopMode) el.virtualDesktopMode.checked = state.virtualDesktopMode;
   el.controller?.classList.toggle("wide-desktop", state.wideDesktopMode);
+  el.controller?.classList.toggle("virtual-desktop", state.virtualDesktopMode);
   if (el.followCursorBtn) {
     const zoomActive = isZoomModeActive();
     el.followCursorBtn.classList.toggle("follow-active", zoomActive);
@@ -3121,6 +3664,68 @@ function setCursorLensEnabled(enabled, options = {}) {
 function setWideDesktopMode(enabled) {
   state.wideDesktopMode = Boolean(enabled);
   localStorage.setItem("remote-wide-desktop-mode", state.wideDesktopMode ? "1" : "0");
+  updatePreferenceUi();
+  drawFrame();
+  updateDiagnostics();
+}
+
+function initializeVirtualDesktopView(options = {}) {
+  const layout = virtualDesktopLayout();
+  state.viewportZoom = options.keepZoom ? Math.max(1, Number(state.viewportZoom) || 1) : virtualDefaultZoom(layout);
+  if (options.resetPan !== false) {
+    state.viewportPanX = 0;
+    state.viewportPanY = 0;
+    state.stagePanX = 0;
+    state.stagePanY = 0;
+  }
+  state.followPausedUntil = 0;
+  const selectedRect = virtualMonitorRect(state.selectedMonitorId, layout);
+  if (selectedRect) {
+    state.virtualCursor = {
+      x: selectedRect.x + selectedRect.width / 2,
+      y: selectedRect.y + selectedRect.height / 2,
+      visible: true,
+      coordinateSpace: layout.coordinateSpace,
+      source: options.source || "mode-enable",
+      monitorId: selectedRect.id,
+      raw: null,
+      at: performance.now()
+    };
+    followVirtualViewportTowardCursor({ force: true, strength: 1, skipDraw: true });
+  }
+  return layout;
+}
+
+function setVirtualDesktopMode(enabled, options = {}) {
+  state.virtualDesktopMode = Boolean(enabled);
+  localStorage.setItem("remote-virtual-desktop-mode", state.virtualDesktopMode ? "1" : "0");
+  if (state.virtualDesktopMode) {
+    initializeVirtualDesktopView(options);
+    closeRtcPeer();
+    if (el.rtcVideo) {
+      el.rtcVideo.pause?.();
+      el.rtcVideo.srcObject = null;
+      el.rtcVideo.style.display = "none";
+    }
+    requestCapturePool("virtual-desktop-enabled");
+    if (state.rtcWs?.readyState === WebSocket.OPEN) {
+      sendRtc("rtc.ready", rtcReadyPayload());
+    } else if (state.connected && shouldUseRtcReceiver() && !options.skipReconnect) {
+      connectRtcReceiver();
+    }
+    scheduleVirtualDesktopPaint();
+  } else {
+    stopVirtualDesktopPaint();
+    closeVirtualRtcPeers("virtual-desktop-disabled");
+    state.virtualCursor = null;
+    state.rtcMultiActive = false;
+    if (el.rtcVideo) el.rtcVideo.style.display = "";
+    closeRtcReceiver("virtual-desktop-disabled", {
+      reconnect: state.connected && shouldUseRtcReceiver() && !options.skipReconnect,
+      reconnectDelayMs: 120
+    });
+  }
+  updateZoomUi();
   updatePreferenceUi();
   drawFrame();
   updateDiagnostics();
@@ -4157,6 +4762,9 @@ function bindControls() {
   el.wideDesktopMode?.addEventListener("change", () => {
     setWideDesktopMode(el.wideDesktopMode.checked);
   });
+  el.virtualDesktopMode?.addEventListener("change", () => {
+    setVirtualDesktopMode(el.virtualDesktopMode.checked);
+  });
   el.showHalo.addEventListener("change", () => {
     setHaloEnabled(el.showHalo.checked);
   });
@@ -4295,6 +4903,41 @@ function displayStageSnapshot() {
   };
 }
 
+function virtualDesktopSnapshot(rect = el.canvas.getBoundingClientRect()) {
+  const layout = virtualDesktopLayout();
+  const viewport = virtualViewportSourceRect(rect);
+  return {
+    enabled: state.virtualDesktopMode,
+    streamCount: state.rtcPeers.size,
+    drawableCount: [...state.rtcPeers.values()].filter((peer) => virtualRtcPeerDrawable(peer)).length,
+    missingMonitorIds: missingVirtualRtcMonitorIds(),
+    active: state.rtcMultiActive,
+    layout: {
+      width: Math.round(layout.width),
+      height: Math.round(layout.height),
+      monitors: layout.monitors.map((item) => ({
+        id: item.id,
+        x: Math.round(item.x),
+        y: Math.round(item.y),
+        width: Math.round(item.width),
+        height: Math.round(item.height)
+      }))
+    },
+    viewport: {
+      sx: Math.round(viewport.sx),
+      sy: Math.round(viewport.sy),
+      sw: Math.round(viewport.sw),
+      sh: Math.round(viewport.sh)
+    },
+    cursor: state.virtualCursor ? {
+      x: Math.round(state.virtualCursor.x),
+      y: Math.round(state.virtualCursor.y),
+      monitorId: state.virtualCursor.monitorId || "",
+      source: state.virtualCursor.source || ""
+    } : null
+  };
+}
+
 function debugSnapshot(lastAck = null) {
   const approxFps = approximateFps();
   const frameBytes = state.frame?.imageByteLength
@@ -4366,6 +5009,7 @@ function debugSnapshot(lastAck = null) {
     stagePanX: Math.round(state.stagePanX * 100) / 100,
     stagePanY: Math.round(state.stagePanY * 100) / 100,
     displayStage: displayStageSnapshot(),
+    virtualDesktop: virtualDesktopSnapshot(rect),
     autoFollowCursor: state.autoFollowCursor,
     cursorLensEnabled: state.cursorLensEnabled,
     cursorMap: state.lastCursorMap,
@@ -4552,6 +5196,7 @@ window.__remoteControllerDebug = {
   frameMetrics,
   displayStageMetrics,
   displayStageSnapshot,
+  virtualDesktopSnapshot,
   normalizeCanvasPoint,
   isEdgePanPoint,
   handleEdgePan,
@@ -4583,7 +5228,20 @@ window.__remoteControllerDebug = {
   setCursorLensZoom,
   setCursorLensSize,
   setWideDesktopMode,
+  setVirtualDesktopMode,
   monitorForDesktopPoint,
+  virtualDesktopLayout,
+  virtualMonitorRect,
+  virtualDefaultZoom,
+  virtualViewportSourceRect,
+  setVirtualCursorFromDesktopPoint,
+  followVirtualViewportTowardCursor,
+  requestCapturePool,
+  ensureVirtualRtcPeer,
+  closeVirtualRtcPeer,
+  hasVideoTrackSize,
+  virtualRtcPeerDrawable,
+  missingVirtualRtcMonitorIds,
   markCursorLensMoving,
   isCursorLensCurrentlyAllowed,
   monitorCalibrationSignature,

@@ -19,6 +19,7 @@ function cleanPeer(peer) {
     monitorId: peer.monitorId || "",
     label: peer.label || peer.role,
     sessionId: peer.sessionId || null,
+    wantsAllMonitors: Boolean(peer.metadata?.wantsAllMonitors),
     captureUrl: peer.metadata?.captureUrl || "",
     capture: peer.metadata?.capture || null,
     connectedAt: peer.connectedAt,
@@ -94,6 +95,20 @@ function monitorIdFromMetadata(metadata = {}) {
   const captureMonitor = metadata?.capture?.requestedMonitor;
   const monitorId = metadata?.monitorId || metadata?.slotMonitorId || captureMonitor;
   return cleanString(monitorId, 80) || "default";
+}
+
+function phoneWantsAllMonitorsPayload(payload = {}) {
+  const wants = cleanString(payload.wants || payload.mode || payload.viewMode, 80).toLowerCase();
+  return wants === "all-screen-video"
+    || wants === "all-monitors"
+    || wants === "virtual-desktop"
+    || wants === "virtual-ultrawide"
+    || Boolean(payload.allMonitors || payload.virtualDesktop);
+}
+
+function cleanMonitorIdList(value = []) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => cleanString(item, 80)).filter(Boolean))].slice(0, 16);
 }
 
 function validateSignalMessage(role, message) {
@@ -191,6 +206,27 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     if (role === "host") return sendTo(activeHost(), message);
     if (role === "phone") return sendTo(phonePeer, message);
     return false;
+  }
+
+  function phoneWantsAllMonitors() {
+    return Boolean(phonePeer?.metadata?.wantsAllMonitors);
+  }
+
+  function hostForMonitor(monitorId = "") {
+    const cleanMonitorId = cleanString(monitorId, 80);
+    if (cleanMonitorId && hostPeers.has(cleanMonitorId)) return hostPeers.get(cleanMonitorId);
+    return activeHost();
+  }
+
+  function monitorTargetFromMessage(message = {}, payload = {}) {
+    return cleanString(
+      message.toMonitorId
+      || message.targetMonitorId
+      || payload.toMonitorId
+      || payload.targetMonitorId
+      || payload.monitorId,
+      80
+    );
   }
 
   function sendError(peer, code, message) {
@@ -316,11 +352,15 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
       peer.metadata.capture = cleanCaptureMetadata(validation.payload);
       rekeyHostPeer(peer, peer.metadata.capture.requestedMonitor);
     }
+    if (peer.role === "phone" && validation.type === "rtc.ready") {
+      peer.metadata.wantsAllMonitors = phoneWantsAllMonitorsPayload(validation.payload);
+    }
     const selectedHost = activeHost();
-    const other = peer.role === "host"
-      ? (selectedHost?.id === peer.id ? phonePeer : null)
-      : selectedHost;
     const routedTypes = new Set(["rtc.offer", "rtc.answer", "rtc.ice", "rtc.stop", "rtc.status"]);
+    const targetMonitorId = monitorTargetFromMessage(message, validation.payload);
+    const other = peer.role === "host"
+      ? ((phoneWantsAllMonitors() || selectedHost?.id === peer.id) ? phonePeer : null)
+      : (targetMonitorId ? hostForMonitor(targetMonitorId) : selectedHost);
     if (validation.type === "rtc.ping") {
       sendTo(peer, { type: "rtc.pong", payload: { room: publicState() } });
       return { ok: true, routed: false, state: publicState() };
@@ -330,6 +370,20 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     }
     if (validation.type === "rtc.ready") {
       sendTo(peer, { type: "rtc.readyAck", payload: { room: publicState() } });
+      if (peer.role === "phone" && peer.metadata.wantsAllMonitors) {
+        const requestedMonitorIds = cleanMonitorIdList(validation.payload.missingMonitorIds || validation.payload.monitorIds);
+        const targetHosts = requestedMonitorIds.length
+          ? requestedMonitorIds.map((monitorId) => hostPeers.get(monitorId)).filter(Boolean)
+          : [...hostPeers.values()];
+        for (const host of targetHosts) {
+          sendTo(host, {
+            type: "rtc.peerReady",
+            from: peer.role,
+            payload: { room: publicState() }
+          });
+        }
+        return { ok: true, routed: targetHosts.length > 0, state: publicState() };
+      }
       if (other) {
         sendTo(other, {
           type: "rtc.peerReady",
@@ -340,7 +394,7 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
       }
       return { ok: true, routed: Boolean(other), state: publicState() };
     }
-    if (peer.role === "host" && routedTypes.has(validation.type) && selectedHost?.id !== peer.id) {
+    if (peer.role === "host" && routedTypes.has(validation.type) && !phoneWantsAllMonitors() && selectedHost?.id !== peer.id) {
       log("rtc.host.messageIgnored", {
         type: validation.type,
         peerId: peer.id,
@@ -367,6 +421,7 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
         type: validation.type,
         from: peer.role,
         fromMonitorId: peer.monitorId || "",
+        toMonitorId: peer.role === "phone" ? (other.monitorId || "") : "",
         payload: validation.payload
       });
       return { ok: true, routed: true, state: publicState() };

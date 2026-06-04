@@ -152,7 +152,7 @@ async function startCapture() {
     capture.stream = stream;
     for (const track of stream.getVideoTracks()) {
       try {
-        track.contentHint = "motion";
+        track.contentHint = "detail";
       } catch {}
       track.addEventListener("unmute", markFirstFrame, { once: true });
       track.addEventListener("ended", () => stopCapture("screen-share-ended"));
@@ -216,15 +216,16 @@ function ensurePeer() {
   const pc = new RTCPeerConnection({ iceServers: [] });
   for (const track of capture.stream.getTracks()) {
     try {
-      if (track.kind === "video") track.contentHint = "motion";
+      if (track.kind === "video") track.contentHint = "detail";
     } catch {}
     const sender = pc.addTrack(track, capture.stream);
     if (track.kind !== "video") continue;
     try {
       const params = sender.getParameters();
-      params.degradationPreference = "maintain-framerate";
+      params.degradationPreference = "maintain-resolution";
       params.encodings = Array.isArray(params.encodings) && params.encodings.length ? params.encodings : [{}];
       params.encodings[0].maxFramerate = 60;
+      params.encodings[0].maxBitrate = 16_000_000;
       params.encodings[0].scaleResolutionDownBy = 1;
       sender.setParameters(params).catch(() => {});
     } catch {}

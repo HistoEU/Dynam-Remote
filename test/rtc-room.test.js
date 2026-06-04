@@ -127,6 +127,83 @@ test("rtc room keeps separate monitor hosts and routes only the selected host", 
   assert.equal(sent.at(-1).message.type, "rtc.answer");
 });
 
+test("rtc room routes every monitor host when phone asks for all screen video", () => {
+  const { room, sent } = createHarness();
+  const hostOne = room.connectPeer({
+    role: "host",
+    label: "Capture display 1",
+    metadata: {
+      monitorId: "display-1",
+      captureUrl: "http://127.0.0.1:4334/rtc?monitor=display-1&slot=display-1"
+    }
+  }).peer;
+  const hostTwo = room.connectPeer({
+    role: "host",
+    label: "Capture display 2",
+    metadata: {
+      monitorId: "display-2",
+      captureUrl: "http://127.0.0.1:4334/rtc?monitor=display-2&slot=display-2"
+    }
+  }).peer;
+  const phone = room.connectPeer({ role: "phone", sessionId: "session-1" }).peer;
+  sent.length = 0;
+
+  const ready = room.handleMessage(phone.id, {
+    type: "rtc.ready",
+    payload: { wants: "all-screen-video", mode: "virtual-desktop" }
+  });
+  assert.equal(ready.ok, true);
+  assert.equal(ready.routed, true);
+  const readyTargets = sent.filter((item) => item.message.type === "rtc.peerReady").map((item) => item.peerId).sort();
+  assert.deepEqual(readyTargets, [hostOne.id, hostTwo.id].sort());
+  assert.equal(room.getState().phone.wantsAllMonitors, true);
+
+  sent.length = 0;
+  const displayOneOffer = { type: "offer", sdp: "v=0\r\no=- display-1-offer" };
+  const displayTwoOffer = { type: "offer", sdp: "v=0\r\no=- display-2-offer" };
+  const offeredOne = room.handleMessage(hostOne.id, { type: "rtc.offer", payload: displayOneOffer });
+  const offeredTwo = room.handleMessage(hostTwo.id, { type: "rtc.offer", payload: displayTwoOffer });
+  assert.equal(offeredOne.routed, true);
+  assert.equal(offeredTwo.routed, true);
+  assert.deepEqual(
+    sent.filter((item) => item.to === "phone" && item.message.type === "rtc.offer").map((item) => item.message.fromMonitorId),
+    ["display-1", "display-2"]
+  );
+
+  sent.length = 0;
+  const answer = { type: "answer", sdp: "v=0\r\no=- phone-answer-display-2" };
+  const answered = room.handleMessage(phone.id, {
+    type: "rtc.answer",
+    toMonitorId: "display-2",
+    payload: answer
+  });
+  assert.equal(answered.ok, true);
+  assert.equal(answered.routed, true);
+  assert.equal(sent.at(-1).peerId, hostTwo.id);
+  assert.equal(sent.at(-1).message.type, "rtc.answer");
+  assert.deepEqual(sent.at(-1).message.payload, answer);
+
+  sent.length = 0;
+  const iced = room.handleMessage(phone.id, {
+    type: "rtc.ice",
+    toMonitorId: "display-1",
+    payload: { candidate: { candidate: "candidate:1 udp 2122260223 192.168.0.7 5000 typ host" } }
+  });
+  assert.equal(iced.ok, true);
+  assert.equal(iced.routed, true);
+  assert.equal(sent.at(-1).peerId, hostOne.id);
+  assert.equal(sent.at(-1).message.type, "rtc.ice");
+
+  sent.length = 0;
+  const retryMissing = room.handleMessage(phone.id, {
+    type: "rtc.ready",
+    payload: { wants: "all-screen-video", missingMonitorIds: ["display-2"] }
+  });
+  assert.equal(retryMissing.ok, true);
+  assert.equal(retryMissing.routed, true);
+  assert.deepEqual(sent.filter((item) => item.message.type === "rtc.peerReady").map((item) => item.peerId), [hostTwo.id]);
+});
+
 test("rtc room rejects invalid role messages and reports errors to sender", () => {
   const { room, sent } = createHarness();
   const host = room.connectPeer({ role: "host" }).peer;
