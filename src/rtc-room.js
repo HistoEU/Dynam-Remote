@@ -16,8 +16,10 @@ function cleanPeer(peer) {
   return {
     id: peer.id,
     role: peer.role,
+    monitorId: peer.monitorId || "",
     label: peer.label || peer.role,
     sessionId: peer.sessionId || null,
+    captureUrl: peer.metadata?.captureUrl || "",
     capture: peer.metadata?.capture || null,
     connectedAt: peer.connectedAt,
     lastSeenAt: peer.lastSeenAt
@@ -33,16 +35,32 @@ function cleanNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function cleanCaptureVerificationScore(payload = {}) {
+  if (!isObject(payload)) return null;
+  return {
+    monitorId: cleanString(payload.monitorId, 80),
+    score: cleanNumber(payload.score),
+    name: cleanString(payload.name, 80),
+    error: cleanString(payload.error, 160)
+  };
+}
+
 function cleanCaptureVerification(payload = {}) {
   if (!isObject(payload)) return null;
+  const scores = Array.isArray(payload.scores)
+    ? payload.scores.map(cleanCaptureVerificationScore).filter(Boolean).slice(0, 8)
+    : [];
   return {
     status: cleanString(payload.status, 40),
     requestedMonitor: cleanString(payload.requestedMonitor, 80),
     requestedSource: cleanString(payload.requestedSource, 120),
     actualMonitorId: cleanString(payload.actualMonitorId, 80),
     score: cleanNumber(payload.score),
+    requestedScore: cleanNumber(payload.requestedScore),
     runnerUpMonitorId: cleanString(payload.runnerUpMonitorId, 80),
     runnerUpScore: cleanNumber(payload.runnerUpScore),
+    scores,
+    probeUsed: Boolean(payload.probeUsed),
     comparedAt: cleanNumber(payload.comparedAt),
     reason: cleanString(payload.reason, 180),
     error: cleanString(payload.error, 160)
@@ -70,6 +88,12 @@ function cleanCaptureMetadata(payload = {}) {
     verification: cleanCaptureVerification(payload.verification),
     updatedAt: Date.now()
   };
+}
+
+function monitorIdFromMetadata(metadata = {}) {
+  const captureMonitor = metadata?.capture?.requestedMonitor;
+  const monitorId = metadata?.monitorId || metadata?.slotMonitorId || captureMonitor;
+  return cleanString(monitorId, 80) || "default";
 }
 
 function validateSignalMessage(role, message) {
@@ -101,11 +125,32 @@ function validateSignalMessage(role, message) {
 function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory = () => crypto.randomUUID() } = {}) {
   if (typeof send !== "function") throw new TypeError("createRtcRoom requires a send(peer, message) function.");
   const peers = new Map();
-  const byRole = new Map();
+  const hostPeers = new Map();
+  let phonePeer = null;
+  let selectedMonitorId = "";
   let negotiationId = 0;
   let state = "idle";
   let lastError = null;
   let updatedAt = now();
+
+  function activeHost() {
+    if (selectedMonitorId && hostPeers.has(selectedMonitorId)) return hostPeers.get(selectedMonitorId);
+    return hostPeers.values().next().value || null;
+  }
+
+  function syncState(preferred = "") {
+    const hasHost = Boolean(activeHost());
+    if (preferred) {
+      state = preferred;
+    } else if (hasHost && phonePeer) {
+      state = "ready";
+    } else if (hasHost || phonePeer) {
+      state = "waiting";
+    } else {
+      state = "idle";
+    }
+    updatedAt = now();
+  }
 
   function touch(nextState = state) {
     state = nextState;
@@ -113,18 +158,20 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
   }
 
   function publicState() {
-    const host = byRole.get("host") || null;
-    const phone = byRole.get("phone") || null;
+    const host = activeHost();
+    const hosts = [...hostPeers.values()].map(cleanPeer);
     return {
       available: true,
       state,
       negotiationId,
       updatedAt,
       lastError,
-      hostConnected: Boolean(host),
-      phoneConnected: Boolean(phone),
+      hostConnected: hosts.length > 0,
+      phoneConnected: Boolean(phonePeer),
+      selectedMonitorId,
       host: host ? cleanPeer(host) : null,
-      phone: phone ? cleanPeer(phone) : null
+      hosts,
+      phone: phonePeer ? cleanPeer(phonePeer) : null
     };
   }
 
@@ -141,7 +188,9 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
   }
 
   function sendToRole(role, message) {
-    return sendTo(byRole.get(role), message);
+    if (role === "host") return sendTo(activeHost(), message);
+    if (role === "phone") return sendTo(phonePeer, message);
+    return false;
   }
 
   function sendError(peer, code, message) {
@@ -155,25 +204,37 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     const peer = peers.get(peerId);
     if (!peer) return { ok: false, state: publicState() };
     peers.delete(peerId);
-    if (byRole.get(peer.role)?.id === peer.id) byRole.delete(peer.role);
-    const other = peer.role === "host" ? byRole.get("phone") : byRole.get("host");
-    if (other) {
-      sendTo(other, { type: "rtc.peerLeft", from: peer.role, payload: { role: peer.role, reason } });
-      touch("waiting");
+    if (peer.role === "host") {
+      if (hostPeers.get(peer.monitorId)?.id === peer.id) hostPeers.delete(peer.monitorId);
+      if (phonePeer) {
+        sendTo(phonePeer, {
+          type: "rtc.peerLeft",
+          from: peer.role,
+          fromMonitorId: peer.monitorId,
+          payload: { role: peer.role, monitorId: peer.monitorId, reason }
+        });
+      }
+      syncState(phonePeer ? "waiting" : "");
     } else {
-      touch("idle");
+      if (phonePeer?.id === peer.id) phonePeer = null;
+      for (const host of hostPeers.values()) {
+        sendTo(host, { type: "rtc.peerLeft", from: peer.role, payload: { role: peer.role, reason } });
+      }
+      syncState(hostPeers.size ? "waiting" : "");
     }
-    log("rtc.peer.disconnected", { role: peer.role, peerId: peer.id, reason });
+    log("rtc.peer.disconnected", { role: peer.role, peerId: peer.id, monitorId: peer.monitorId || "", reason });
     return { ok: true, peer, state: publicState() };
   }
 
   function connectPeer({ role, socket = null, label = "", sessionId = null, metadata = {} } = {}) {
     if (!VALID_ROLES.has(role)) return { ok: false, code: "BAD_RTC_ROLE", message: "RTC role must be host or phone." };
-    const replaced = byRole.get(role);
+    const monitorId = role === "host" ? monitorIdFromMetadata(metadata) : "";
+    const replaced = role === "host" ? hostPeers.get(monitorId) : phonePeer;
     if (replaced) disconnectPeer(replaced.id, "replaced");
     const peer = {
       id: idFactory(),
       role,
+      monitorId,
       socket,
       label,
       sessionId,
@@ -182,17 +243,55 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
       lastSeenAt: now()
     };
     peers.set(peer.id, peer);
-    byRole.set(role, peer);
+    if (role === "host") {
+      hostPeers.set(monitorId, peer);
+      if (!selectedMonitorId || selectedMonitorId === "default") selectedMonitorId = monitorId;
+    } else {
+      phonePeer = peer;
+    }
     lastError = null;
-    touch(byRole.get("host") && byRole.get("phone") ? "ready" : "waiting");
-    log("rtc.peer.connected", { role, peerId: peer.id, sessionId });
+    syncState();
+    log("rtc.peer.connected", { role, peerId: peer.id, sessionId, monitorId });
     sendTo(peer, { type: "rtc.hello", payload: { peer: cleanPeer(peer), room: publicState() } });
-    const other = role === "host" ? byRole.get("phone") : byRole.get("host");
-    if (other) {
-      sendTo(other, { type: "rtc.peerJoined", from: role, payload: { peer: cleanPeer(peer), room: publicState() } });
-      sendTo(peer, { type: "rtc.peerJoined", from: other.role, payload: { peer: cleanPeer(other), room: publicState() } });
+    if (role === "host") {
+      if (phonePeer) {
+        sendTo(phonePeer, {
+          type: "rtc.peerJoined",
+          from: role,
+          fromMonitorId: monitorId,
+          payload: { peer: cleanPeer(peer), room: publicState() }
+        });
+        sendTo(peer, { type: "rtc.peerJoined", from: phonePeer.role, payload: { peer: cleanPeer(phonePeer), room: publicState() } });
+      }
+    } else {
+      for (const host of hostPeers.values()) {
+        sendTo(host, { type: "rtc.peerJoined", from: role, payload: { peer: cleanPeer(peer), room: publicState() } });
+        sendTo(peer, {
+          type: "rtc.peerJoined",
+          from: host.role,
+          fromMonitorId: host.monitorId,
+          payload: { peer: cleanPeer(host), room: publicState() }
+        });
+      }
     }
     return { ok: true, peer, replacedPeerId: replaced?.id || null, state: publicState() };
+  }
+
+  function rekeyHostPeer(peer, nextMonitorId) {
+    if (!peer || peer.role !== "host") return;
+    const cleanMonitorId = cleanString(nextMonitorId, 80) || peer.monitorId || "default";
+    if (cleanMonitorId === peer.monitorId) return;
+    if (hostPeers.get(peer.monitorId)?.id === peer.id) hostPeers.delete(peer.monitorId);
+    peer.monitorId = cleanMonitorId;
+    hostPeers.set(cleanMonitorId, peer);
+    if (!selectedMonitorId || selectedMonitorId === "default") selectedMonitorId = cleanMonitorId;
+  }
+
+  function setSelectedMonitor(monitorId) {
+    selectedMonitorId = cleanString(monitorId, 80);
+    syncState();
+    log("rtc.monitor.selected", { monitorId: selectedMonitorId, activeHostPeerId: activeHost()?.id || null });
+    return publicState();
   }
 
   function handleMessage(peerId, rawMessage) {
@@ -215,8 +314,12 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     peer.lastSeenAt = now();
     if (peer.role === "host" && ["rtc.ready", "rtc.ping", "rtc.status"].includes(validation.type)) {
       peer.metadata.capture = cleanCaptureMetadata(validation.payload);
+      rekeyHostPeer(peer, peer.metadata.capture.requestedMonitor);
     }
-    const other = peer.role === "host" ? byRole.get("phone") : byRole.get("host");
+    const selectedHost = activeHost();
+    const other = peer.role === "host"
+      ? (selectedHost?.id === peer.id ? phonePeer : null)
+      : selectedHost;
     const routedTypes = new Set(["rtc.offer", "rtc.answer", "rtc.ice", "rtc.stop", "rtc.status"]);
     if (validation.type === "rtc.ping") {
       sendTo(peer, { type: "rtc.pong", payload: { room: publicState() } });
@@ -227,8 +330,24 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     }
     if (validation.type === "rtc.ready") {
       sendTo(peer, { type: "rtc.readyAck", payload: { room: publicState() } });
-      if (other) sendTo(other, { type: "rtc.peerReady", from: peer.role, payload: { room: publicState() } });
+      if (other) {
+        sendTo(other, {
+          type: "rtc.peerReady",
+          from: peer.role,
+          fromMonitorId: peer.monitorId || "",
+          payload: { room: publicState() }
+        });
+      }
       return { ok: true, routed: Boolean(other), state: publicState() };
+    }
+    if (peer.role === "host" && routedTypes.has(validation.type) && selectedHost?.id !== peer.id) {
+      log("rtc.host.messageIgnored", {
+        type: validation.type,
+        peerId: peer.id,
+        monitorId: peer.monitorId,
+        selectedMonitorId
+      });
+      return { ok: true, routed: false, state: publicState() };
     }
     if (!other) {
       sendError(peer, "RTC_PEER_WAITING", "The other RTC peer is not connected yet.");
@@ -247,6 +366,7 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
       sendTo(other, {
         type: validation.type,
         from: peer.role,
+        fromMonitorId: peer.monitorId || "",
         payload: validation.payload
       });
       return { ok: true, routed: true, state: publicState() };
@@ -259,7 +379,9 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
       sendTo(peer, { type: "rtc.stop", payload: { reason } });
     }
     peers.clear();
-    byRole.clear();
+    hostPeers.clear();
+    phonePeer = null;
+    selectedMonitorId = "";
     negotiationId += 1;
     lastError = null;
     touch("idle");
@@ -272,6 +394,7 @@ function createRtcRoom({ send, log = () => {}, now = () => Date.now(), idFactory
     disconnectPeer,
     getState: publicState,
     handleMessage,
+    setSelectedMonitor,
     sendToRole,
     reset
   };

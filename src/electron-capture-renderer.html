@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; connect-src http: https: ws: wss:; style-src 'unsafe-inline'; media-src 'self' blob:;">
+    <title>Remote Capture Host</title>
+    <style>
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: #05070a;
+        color: #d7dde8;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      main {
+        padding: 16px;
+      }
+      video {
+        width: 320px;
+        height: 180px;
+        background: #000;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div id="status">Starting exact display capture...</div>
+      <video id="preview" autoplay playsinline muted></video>
+    </main>
+    <script src="./electron-capture-renderer.js"></script>
+  </body>
+</html>

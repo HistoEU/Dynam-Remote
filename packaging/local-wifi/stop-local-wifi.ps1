@@ -6,6 +6,12 @@ $ErrorActionPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DataDir = Join-Path $Root "data"
 $PidPath = Join-Path $DataDir "remote-controller.pid"
+$PortPath = Join-Path $DataDir "remote-controller.port"
+
+if ((Test-Path -LiteralPath $PortPath) -and -not $PSBoundParameters.ContainsKey("Port")) {
+  $portText = (Get-Content -Raw -LiteralPath $PortPath).Trim()
+  if ($portText) { $Port = [int]$portText }
+}
 
 Write-Host "Stopping Remote Controller..." -ForegroundColor Yellow
 if (Test-Path -LiteralPath $PidPath) {
@@ -37,6 +43,14 @@ $nodes = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Obj
 foreach ($node in $nodes) {
   Stop-Process -Id $node.ProcessId -Force
   Write-Host "Stopped host process $($node.ProcessId)." -ForegroundColor Green
+}
+
+$helpers = @(Get-CimInstance Win32_Process -Filter "Name = 'electron.exe'" | Where-Object {
+  $_.CommandLine -like "*electron-capture-main.js*" -and $_.CommandLine -like "*$Root*"
+})
+foreach ($helper in $helpers) {
+  Stop-Process -Id $helper.ProcessId -Force
+  Write-Host "Stopped capture helper $($helper.ProcessId)." -ForegroundColor Green
 }
 
 Write-Host "Done."

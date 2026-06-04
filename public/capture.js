@@ -5,14 +5,18 @@ const hostKey = params.get("key") || "";
 const autoStart = params.get("autostart") === "1";
 const requestedSource = params.get("source") || "this screen";
 const requestedMonitor = params.get("monitor") || "";
+const requestedSlot = params.get("slot") || requestedMonitor;
+const debugProbe = params.get("debugProbe") === "1";
 const RTC_HEARTBEAT_MS = 2000;
-const CAPTURE_VERIFY_SAMPLE_W = 24;
-const CAPTURE_VERIFY_SAMPLE_H = 14;
+const CAPTURE_VERIFY_SAMPLE_W = 64;
+const CAPTURE_VERIFY_SAMPLE_H = 36;
 const CAPTURE_VERIFY_DELAY_MS = 420;
 const CAPTURE_VERIFY_RETRY_MS = 1800;
 const CAPTURE_VERIFY_REFRESH_MS = 9000;
 const CAPTURE_VERIFY_MATCH_SCORE = 0.74;
-const CAPTURE_VERIFY_AMBIGUOUS_GAP = 0.028;
+const CAPTURE_VERIFY_AMBIGUOUS_GAP = 0.018;
+const CAPTURE_VERIFY_MISMATCH_GAP = 0.018;
+const CAPTURE_VERIFY_PROBE_DELAY_MS = 220;
 const DISPLAY_OUTPUT_AUDIO = {
   systemAudio: "include",
   suppressLocalAudioPlayback: false,
@@ -84,7 +88,10 @@ function sendRtc(type, payload = {}) {
 function hideCaptureWindowSoon(reason = "capture-sharing") {
   for (const delayMs of [80, 450, 1200]) {
     setTimeout(() => {
-      fetch(`/api/hide-capture-window?reason=${encodeURIComponent(`${reason}-${delayMs}ms`)}`, {
+      const hideUrl = new URL("/api/hide-capture-window", location.origin);
+      hideUrl.searchParams.set("reason", `${reason}-${delayMs}ms`);
+      if (requestedSlot) hideUrl.searchParams.set("monitor", requestedSlot);
+      fetch(hideUrl.href, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -103,7 +110,13 @@ function connectSignal() {
   }
   if (capture.ws && [WebSocket.CONNECTING, WebSocket.OPEN].includes(capture.ws.readyState)) return;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  capture.ws = new WebSocket(`${scheme}://${location.host}/rtc?role=host&key=${encodeURIComponent(hostKey)}`);
+  const rtcUrl = new URL(`${scheme}://${location.host}/rtc`);
+  rtcUrl.searchParams.set("role", "host");
+  rtcUrl.searchParams.set("key", hostKey);
+  if (requestedMonitor) rtcUrl.searchParams.set("monitor", requestedMonitor);
+  if (requestedSlot) rtcUrl.searchParams.set("slot", requestedSlot);
+  if (requestedSource) rtcUrl.searchParams.set("source", requestedSource);
+  capture.ws = new WebSocket(rtcUrl.href);
   setStatus("Connecting the low-latency signal channel...", { signal: "connecting" });
   capture.ws.addEventListener("open", () => {
     setStatus("Signal ready. Waiting for the phone if it is not already connected.", { signal: "ready" });
@@ -167,6 +180,14 @@ function updateCaptureDiagnosticsUi() {
   }
 }
 
+function captureVerifiedForOffer() {
+  if (!requestedMonitor) return true;
+  return Boolean(
+    capture.verification?.status === "matched"
+    && capture.verification?.actualMonitorId === requestedMonitor
+  );
+}
+
 function markFirstFrame() {
   if (!capture.startedAt || capture.firstFrameAt) return;
   capture.firstFrameAt = Date.now();
@@ -183,13 +204,36 @@ function scheduleCaptureVerification(reason = "scheduled", delayMs = CAPTURE_VER
   }, Math.max(0, Number(delayMs) || 0));
 }
 
-function sampleDrawable(source) {
+function sourceSize(source) {
+  return {
+    width: Number(source.videoWidth || source.naturalWidth || source.width || 0),
+    height: Number(source.videoHeight || source.naturalHeight || source.height || 0)
+  };
+}
+
+function probeRegion(source) {
+  const size = sourceSize(source);
+  if (!size.width || !size.height) return null;
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(1, Math.round(size.width * 0.34)),
+    height: Math.max(1, Math.round(size.height * 0.28))
+  };
+}
+
+function sampleDrawable(source, options = {}) {
   const canvas = document.createElement("canvas");
   canvas.width = CAPTURE_VERIFY_SAMPLE_W;
   canvas.height = CAPTURE_VERIFY_SAMPLE_H;
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return null;
-  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const region = options.region === "probe" ? probeRegion(source) : null;
+  if (region) {
+    context.drawImage(source, region.x, region.y, region.width, region.height, 0, 0, canvas.width, canvas.height);
+  } else {
+    context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  }
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
   const values = [];
   for (let index = 0; index < pixels.length; index += 4) {
@@ -210,7 +254,7 @@ async function drawableFromBlob(blob) {
   });
 }
 
-async function fingerprintReference(monitorId) {
+async function fingerprintReference(monitorId, options = {}) {
   const response = await fetch(`/api/capture-reference?monitor=${encodeURIComponent(monitorId)}&_=${Date.now()}`, {
     headers: { "x-host-key": hostKey }
   });
@@ -218,21 +262,42 @@ async function fingerprintReference(monitorId) {
   const blob = await response.blob();
   const drawable = await drawableFromBlob(blob);
   try {
-    return sampleDrawable(drawable);
+    return sampleDrawable(drawable, options);
   } finally {
     if (typeof drawable.close === "function") drawable.close();
     if (drawable instanceof HTMLImageElement && drawable.src?.startsWith("blob:")) URL.revokeObjectURL(drawable.src);
   }
 }
 
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+async function requestCaptureProbe(reason = "verify") {
+  if (!requestedMonitor) return null;
+  try {
+    const probeUrl = new URL("/api/capture-probe", location.origin);
+    probeUrl.searchParams.set("reason", reason);
+    const response = await fetch(probeUrl.href, {
+      headers: { "x-host-key": hostKey }
+    });
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 function compareFingerprints(a = [], b = []) {
   const length = Math.min(a.length, b.length);
   if (!length) return 0;
-  let diff = 0;
+  let squaredDiff = 0;
   for (let index = 0; index < length; index += 1) {
-    diff += Math.abs(Number(a[index] || 0) - Number(b[index] || 0));
+    const diff = Number(a[index] || 0) - Number(b[index] || 0);
+    squaredDiff += diff * diff;
   }
-  const score = 1 - diff / (length * 255);
+  const rms = Math.sqrt(squaredDiff / length);
+  const score = 1 - rms / 255;
   return Math.max(0, Math.min(1, Math.round(score * 10000) / 10000));
 }
 
@@ -246,34 +311,39 @@ async function verifyCaptureSource(reason = "manual") {
   }
   capture.verifying = true;
   try {
-    const liveFingerprint = sampleDrawable(el.preview);
-    if (!liveFingerprint) throw new Error("Live video fingerprint could not be sampled.");
     const hostState = await fetch(`/api/host?key=${encodeURIComponent(hostKey)}&_=${Date.now()}`).then((response) => response.json());
     const monitors = Array.isArray(hostState.monitors) ? hostState.monitors.filter((monitor) => monitor?.id) : [];
-    const results = [];
-    for (const monitor of monitors) {
+    const probe = debugProbe && monitors.length > 1 ? await requestCaptureProbe(reason) : null;
+    const probeActive = Boolean(probe?.ok || probe?.reused);
+    if (probeActive) await wait(CAPTURE_VERIFY_PROBE_DELAY_MS);
+    const sampleOptions = probeActive ? { region: "probe" } : {};
+    const liveFingerprint = sampleDrawable(el.preview, sampleOptions);
+    if (!liveFingerprint) throw new Error("Live video fingerprint could not be sampled.");
+    const results = await Promise.all(monitors.map(async (monitor) => {
       try {
-        const reference = await fingerprintReference(monitor.id);
-        results.push({
+        const reference = await fingerprintReference(monitor.id, sampleOptions);
+        return {
           monitorId: monitor.id,
           sourceId: monitor.sourceId || "",
           name: monitor.name || monitor.id,
           score: compareFingerprints(liveFingerprint, reference)
-        });
+        };
       } catch (error) {
-        results.push({
+        return {
           monitorId: monitor.id,
           sourceId: monitor.sourceId || "",
           name: monitor.name || monitor.id,
           score: 0,
           error: error.message
-        });
+        };
       }
-    }
+    }));
     results.sort((a, b) => b.score - a.score);
     const best = results[0] || null;
     const runnerUp = results[1] || null;
+    const requestedResult = results.find((result) => result.monitorId === requestedMonitor) || null;
     const gap = best && runnerUp ? best.score - runnerUp.score : best ? best.score : 0;
+    const requestedGap = best && requestedResult ? best.score - requestedResult.score : 0;
     let status = "failed";
     let actualMonitorId = best?.monitorId || "";
     let verifyReason = "No monitor reference could be compared.";
@@ -282,6 +352,9 @@ async function verifyCaptureSource(reason = "manual") {
       verifyReason = status === "matched"
         ? `Video fingerprint matches ${requestedMonitor}.`
         : `Video fingerprint matched ${best.monitorId} while ${requestedMonitor} was requested.`;
+    } else if (best && best.score >= CAPTURE_VERIFY_MATCH_SCORE && best.monitorId !== requestedMonitor && requestedGap >= CAPTURE_VERIFY_MISMATCH_GAP) {
+      status = "mismatch";
+      verifyReason = `Video fingerprint matched ${best.monitorId} while ${requestedMonitor} was requested.`;
     } else if (best) {
       status = "ambiguous";
       verifyReason = `Best visual match was ${best.monitorId}, but the score gap was too small.`;
@@ -292,12 +365,21 @@ async function verifyCaptureSource(reason = "manual") {
       requestedSource,
       actualMonitorId,
       score: best?.score || 0,
+      requestedScore: requestedResult?.score || 0,
       runnerUpMonitorId: runnerUp?.monitorId || "",
       runnerUpScore: runnerUp?.score || 0,
+      scores: results.map((result) => ({
+        monitorId: result.monitorId,
+        name: result.name,
+        score: result.score,
+        error: result.error || ""
+      })),
+      probeUsed: probeActive,
       comparedAt: Date.now(),
       reason: verifyReason
     };
     sendRtc("rtc.status", currentCaptureMeta());
+    if (status === "matched" && capture.phoneReady) await makeOffer();
     if (status === "mismatch" || status === "ambiguous" || status === "failed") {
       scheduleCaptureVerification(status, status === "mismatch" ? CAPTURE_VERIFY_REFRESH_MS : CAPTURE_VERIFY_RETRY_MS);
     }
@@ -463,6 +545,11 @@ function ensurePeer() {
 
 async function makeOffer() {
   if (!capture.stream || capture.makingOffer) return;
+  if (!captureVerifiedForOffer()) {
+    setStatus(`Verifying ${requestedSource} before sending video.`, { signal: "verifying", video: "verifying" });
+    scheduleCaptureVerification("offer-gated", CAPTURE_VERIFY_RETRY_MS);
+    return;
+  }
   capture.makingOffer = true;
   try {
     const pc = ensurePeer();

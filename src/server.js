@@ -15,6 +15,9 @@ const { createSessionStore, randomToken } = require("./session-store");
 const { createSettingsStore } = require("./settings-store");
 const { nextFrameDelayMs } = require("./frame-timing");
 const { createRtcRoom } = require("./rtc-room");
+const { createCapturePool } = require("./capture-pool");
+const { createProbeToken, showCaptureProbe } = require("./capture-probe");
+const { buildElectronCaptureArgs, findElectronBinary } = require("./electron-capture-launcher");
 const { shouldAllowRtcCaptureOpen, shouldAutoLaunchRtcCapture } = require("./rtc-autostart-policy");
 const { acceptKey, decodeFrames, sendBinary: sendWsBinary, sendJson: sendWsJson } = require("./ws");
 
@@ -22,6 +25,7 @@ const PORT = Number(process.env.PORT || 4317);
 const HOST = process.env.HOST || "::";
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 const DATA_DIR = path.join(__dirname, "..", "data");
+const ELECTRON_CAPTURE_MAIN_PATH = path.join(__dirname, "electron-capture-main.js");
 const LATEST_PHONE_PROOF_PATH = path.join(DATA_DIR, "latest-phone-proof.json");
 const CAPTURE_BROWSER_PROFILE_DIR = path.join(DATA_DIR, "capture-browser-profile");
 const MAX_JSON_BODY_BYTES = 64 * 1024;
@@ -29,6 +33,8 @@ const NOISY_STATE_BROADCAST_MS = 250;
 const RTC_CAPTURE_STALE_MS = 12000;
 const CAPTURE_LAUNCH_INFLIGHT_MS = 8000;
 const CAPTURE_SOURCE_CORRECTION_COOLDOWN_MS = 2600;
+const CAPTURE_PROBE_DURATION_MS = 3400;
+const CAPTURE_PROBE_REUSE_MS = 1400;
 const hostKey = process.env.HOST_KEY || randomToken(18);
 const publicUrl = process.env.PUBLIC_URL || "";
 const captureMode = process.env.CAPTURE_MODE || "fake";
@@ -113,6 +119,13 @@ let captureInFlight = false;
 let immediateFrameTimer = null;
 let input = null;
 let rtcRoom = null;
+let capturePool = null;
+let captureProbeState = {
+  token: "",
+  activeUntil: 0,
+  shownAt: 0,
+  markers: []
+};
 let inputActivityUntil = 0;
 let lastInputAt = 0;
 let stateBroadcastTimer = null;
@@ -313,10 +326,13 @@ capture = createCaptureAdapter({
   cursorProvider: () => input.getCursorPosition()
 });
 selectedMonitorId = capture.getMonitors()[0]?.id || "display-1";
+capturePool = createCapturePool({ staleAfterMs: RTC_CAPTURE_STALE_MS });
+capturePool.syncMonitors(capture.getMonitors());
 rtcRoom = createRtcRoom({
   send: (peer, message) => sendWsJson(peer.socket, message),
   log
 });
+rtcRoom.setSelectedMonitor(selectedMonitorId);
 let lastMonitorSignature = "";
 
 function monitorSignature(monitors = capture.getMonitors()) {
@@ -338,6 +354,7 @@ async function refreshMonitorList(reason = "refresh") {
   const before = monitorSignature();
   await capture.refreshMonitors();
   const monitors = capture.getMonitors();
+  if (capturePool) capturePool.syncMonitors(monitors);
   const after = monitorSignature(monitors);
   if (after && after !== before && after !== lastMonitorSignature) {
     lastMonitorSignature = after;
@@ -378,6 +395,7 @@ function currentCaptureDiagnostics(monitors, rtcStatus) {
 
 function getPublicState() {
   const monitors = capture.getMonitors();
+  if (capturePool) capturePool.syncMonitors(monitors);
   const addresses = getReachableAddresses(PORT, { publicUrl });
   const rtcStatus = rtcRoom ? rtcRoom.getState() : { available: false, state: "unavailable" };
   return {
@@ -411,6 +429,8 @@ function getPublicState() {
       hiddenClients: hiddenClientCount()
     },
     rtcStatus,
+    capturePool: capturePool ? capturePool.publicState() : { slots: [] },
+    captureProbe: publicCaptureProbeState(),
     captureDiagnostics: currentCaptureDiagnostics(monitors, rtcStatus),
     inputMode,
     settings: publicSettings(),
@@ -546,15 +566,73 @@ function noteCaptureAutoDetect(status, reason = "") {
   };
 }
 
+function publicCaptureProbeState() {
+  return {
+    token: captureProbeState.token,
+    active: Date.now() < Number(captureProbeState.activeUntil || 0),
+    activeUntil: captureProbeState.activeUntil,
+    shownAt: captureProbeState.shownAt,
+    markers: captureProbeState.markers
+  };
+}
+
+function ensureCaptureProbe(reason = "capture-verification") {
+  const now = Date.now();
+  const monitors = capture?.getMonitors?.() || [];
+  const remainingMs = Math.max(0, Number(captureProbeState.activeUntil || 0) - now);
+  const recentlyShown = now - Number(captureProbeState.shownAt || 0) < CAPTURE_PROBE_REUSE_MS;
+  if (captureProbeState.token && (recentlyShown || remainingMs > 900)) {
+    return {
+      ok: true,
+      reused: true,
+      token: captureProbeState.token,
+      activeUntil: captureProbeState.activeUntil,
+      durationMs: remainingMs,
+      markers: captureProbeState.markers
+    };
+  }
+  const token = createProbeToken(() => now);
+  const result = showCaptureProbe({
+    monitors,
+    token,
+    durationMs: CAPTURE_PROBE_DURATION_MS,
+    log
+  });
+  captureProbeState = {
+    token,
+    activeUntil: now + CAPTURE_PROBE_DURATION_MS,
+    shownAt: now,
+    markers: result.markers || []
+  };
+  log("capture.probe.requested", {
+    reason,
+    token,
+    ok: Boolean(result.ok),
+    supported: Boolean(result.supported),
+    markers: captureProbeState.markers.length
+  });
+  return {
+    ...result,
+    activeUntil: captureProbeState.activeUntil,
+    shownAt: captureProbeState.shownAt
+  };
+}
+
 function capturePageUrl({ autoStart = false, monitorId = selectedMonitorId } = {}) {
   const url = new URL(`http://127.0.0.1:${PORT}/capture`);
   url.searchParams.set("key", hostKey);
   if (autoStart) url.searchParams.set("autostart", "1");
   if (monitorId) {
     url.searchParams.set("monitor", monitorId);
+    url.searchParams.set("slot", monitorId);
     url.searchParams.set("source", captureSourceNameForMonitor(monitorId));
   }
   return url.href;
+}
+
+function captureBrowserProfileDir(monitorId = selectedMonitorId) {
+  const safeMonitorId = String(monitorId || "default").replace(/[^a-z0-9_.-]/gi, "-").slice(0, 80) || "default";
+  return path.join(DATA_DIR, `capture-browser-profile-${safeMonitorId}`);
 }
 
 function browserCandidates() {
@@ -590,13 +668,17 @@ function findCaptureBrowser() {
   return "";
 }
 
-function stopCaptureBrowserProcesses(reason = "capture-relaunch") {
+function stopCaptureBrowserProcesses(reason = "capture-relaunch", monitorId = selectedMonitorId) {
   if (process.platform !== "win32") return { stopped: 0, reason, supported: false };
-  const escapedProfile = CAPTURE_BROWSER_PROFILE_DIR.replace(/'/g, "''");
+  const escapedProfile = captureBrowserProfileDir(monitorId).replace(/'/g, "''");
+  const escapedRepo = path.join(__dirname, "..").replace(/'/g, "''");
+  const escapedMonitor = String(monitorId || "").replace(/'/g, "''");
   const script = [
     "$ErrorActionPreference='SilentlyContinue'",
     `$profile='${escapedProfile}'`,
-    "$matches = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) }",
+    `$repo='${escapedRepo}'`,
+    `$monitor='--monitor-id=${escapedMonitor}'`,
+    "$matches = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine.Contains($profile) -or ($_.CommandLine.Contains($repo) -and $_.CommandLine.Contains('electron-capture-main.js') -and $_.CommandLine.Contains($monitor))) }",
     "$count = 0",
     "foreach ($item in $matches) { Stop-Process -Id $item.ProcessId -Force -ErrorAction SilentlyContinue; $count += 1 }",
     "$count"
@@ -611,9 +693,62 @@ function stopCaptureBrowserProcesses(reason = "capture-relaunch") {
   return { stopped, reason, supported: true };
 }
 
-function hideCaptureBrowserWindow(reason = "capture-sharing") {
+function shouldPreferElectronCapture() {
+  const engine = String(process.env.RTC_CAPTURE_ENGINE || "auto").toLowerCase();
+  if (engine === "chrome" || engine === "browser") return false;
+  if (engine === "electron") return true;
+  return process.platform === "win32" && Boolean(findElectronBinary({ cwd: path.join(__dirname, "..") }));
+}
+
+function spawnElectronCaptureHost({ autoStart = true, reason = "manual", monitorId = selectedMonitorId } = {}) {
+  const electronPath = findElectronBinary({ cwd: path.join(__dirname, "..") });
+  if (!electronPath) return null;
+  const monitor = capture?.getMonitors?.().find((item) => item.id === monitorId) || { id: monitorId, name: monitorId };
+  const captureSourceName = captureSourceNameForMonitor(monitorId);
+  const hostUrl = `http://127.0.0.1:${PORT}`;
+  const args = buildElectronCaptureArgs({
+    appPath: ELECTRON_CAPTURE_MAIN_PATH,
+    hostUrl,
+    hostKey,
+    monitor,
+    requestedSourceName: captureSourceName
+  });
+  fs.mkdirSync(path.join(__dirname, "..", "output"), { recursive: true });
+  const safeMonitorId = String(monitorId || "default").replace(/[^a-z0-9_.-]/gi, "-").slice(0, 80) || "default";
+  const stdoutPath = path.join(__dirname, "..", "output", `electron-capture-${safeMonitorId}.out.log`);
+  const stderrPath = path.join(__dirname, "..", "output", `electron-capture-${safeMonitorId}.err.log`);
+  const stdout = fs.openSync(stdoutPath, "a");
+  const stderr = fs.openSync(stderrPath, "a");
+  const isCmdLauncher = process.platform === "win32" && /\.cmd$/i.test(electronPath);
+  const command = isCmdLauncher ? "cmd.exe" : electronPath;
+  const spawnArgs = isCmdLauncher ? ["/d", "/s", "/c", `"${electronPath}" ${args.map((arg) => `"${String(arg).replace(/"/g, '\\"')}"`).join(" ")}`] : args;
+  const child = spawn(command, spawnArgs, {
+    detached: true,
+    stdio: ["ignore", stdout, stderr],
+    windowsHide: true
+  });
+  child.unref();
+  const captureUrl = `electron-capture://${encodeURIComponent(monitorId)}?source=${encodeURIComponent(captureSourceName)}`;
+  return {
+    ok: true,
+    captureUrl,
+    browserPath: electronPath,
+    profileDir: "",
+    args: spawnArgs,
+    mode: "electron-desktop-capturer",
+    autoStart,
+    autoSelect: true,
+    monitorId,
+    captureSourceName,
+    reason,
+    pid: child.pid || null,
+    logs: { stdoutPath, stderrPath }
+  };
+}
+
+function hideCaptureBrowserWindow(reason = "capture-sharing", monitorId = selectedMonitorId) {
   if (process.platform !== "win32") return { ok: false, hidden: 0, reason, supported: false };
-  const escapedProfile = CAPTURE_BROWSER_PROFILE_DIR.replace(/'/g, "''");
+  const escapedProfile = captureBrowserProfileDir(monitorId).replace(/'/g, "''");
   const script = [
     "$ErrorActionPreference='SilentlyContinue'",
     `$profile='${escapedProfile}'`,
@@ -634,39 +769,45 @@ function hideCaptureBrowserWindow(reason = "capture-sharing") {
   return { ok: true, hidden, reason, supported: true };
 }
 
-function scheduleCaptureWindowHide(reason = "capture-launch") {
+function scheduleCaptureWindowHide(reason = "capture-launch", monitorId = selectedMonitorId) {
   if (process.platform !== "win32") return;
   for (const delayMs of [250, 900, 1800, 3200]) {
     setTimeout(() => {
       try {
-        hideCaptureBrowserWindow(`${reason}-${delayMs}ms`);
+        hideCaptureBrowserWindow(`${reason}-${delayMs}ms`, monitorId);
       } catch {}
     }, delayMs);
   }
 }
 
+function rtcHostForMonitor(rtcState = rtcRoom?.getState(), monitorId = selectedMonitorId) {
+  const hosts = Array.isArray(rtcState?.hosts) ? rtcState.hosts : [];
+  return hosts.find((host) => host.monitorId === monitorId || host.capture?.requestedMonitor === monitorId) || null;
+}
+
 function rtcHostMatchesMonitor(rtcState = rtcRoom?.getState(), monitorId = selectedMonitorId) {
   const monitors = capture?.getMonitors?.() || [];
   if (monitors.length <= 1) return true;
-  const requestedMonitor = rtcState?.host?.capture?.requestedMonitor;
-  return Boolean(requestedMonitor && requestedMonitor === monitorId);
+  return Boolean(rtcHostForMonitor(rtcState, monitorId));
 }
 
 function isFreshRtcHost(rtcState = rtcRoom?.getState(), monitorId = selectedMonitorId) {
-  if (!rtcState?.hostConnected || !rtcState.host?.lastSeenAt) return false;
-  if (!rtcHostMatchesMonitor(rtcState, monitorId)) return false;
-  return Date.now() - Number(rtcState.host.lastSeenAt) <= RTC_CAPTURE_STALE_MS;
+  const host = rtcHostForMonitor(rtcState, monitorId) || (monitorId === selectedMonitorId ? rtcState?.host : null);
+  if (!rtcState?.hostConnected || !host?.lastSeenAt) return false;
+  return Date.now() - Number(host.lastSeenAt) <= RTC_CAPTURE_STALE_MS;
 }
 
-function clearStaleRtcHost(rtcState = rtcRoom?.getState(), reason = "stale-capture") {
-  if (!rtcState?.hostConnected || isFreshRtcHost(rtcState)) return false;
-  rtcRoom.disconnectPeer(rtcState.host.id, reason);
+function clearStaleRtcHost(rtcState = rtcRoom?.getState(), reason = "stale-capture", monitorId = selectedMonitorId) {
+  const host = rtcHostForMonitor(rtcState, monitorId) || (monitorId === selectedMonitorId ? rtcState?.host : null);
+  if (!host || isFreshRtcHost(rtcState, monitorId)) return false;
+  rtcRoom.disconnectPeer(host.id, reason);
   log("rtc.host.staleCleared", {
     reason,
-    peerId: rtcState.host.id,
-    ageMs: Date.now() - Number(rtcState.host.lastSeenAt || 0),
-    requestedMonitor: rtcState.host.capture?.requestedMonitor || "",
-    selectedMonitorId
+    peerId: host.id,
+    ageMs: Date.now() - Number(host.lastSeenAt || 0),
+    requestedMonitor: host.capture?.requestedMonitor || "",
+    selectedMonitorId,
+    monitorId
   });
   return true;
 }
@@ -701,15 +842,30 @@ function markCaptureLaunch(result = {}) {
   captureLaunchState.autoSelect = Boolean(result.autoSelect);
   captureLaunchState.monitorId = result.monitorId || selectedMonitorId;
   captureLaunchState.captureSourceName = result.captureSourceName || captureSourceNameForMonitor(captureLaunchState.monitorId);
+  if (capturePool) {
+    capturePool.markStarting(captureLaunchState.monitorId, {
+      sourceName: captureLaunchState.captureSourceName,
+      captureUrl: captureLaunchState.captureUrl
+    });
+  }
 }
 
 function markCaptureAlive(peer = null) {
   captureLaunchState.status = "alive";
   captureLaunchState.lastLaunchAt = Date.now();
   const captureMeta = peer?.metadata?.capture || peer?.capture || {};
-  if (peer?.metadata?.captureUrl) captureLaunchState.captureUrl = peer.metadata.captureUrl;
+  const peerCaptureUrl = peer?.metadata?.captureUrl || peer?.captureUrl || "";
+  if (peerCaptureUrl) captureLaunchState.captureUrl = peerCaptureUrl;
   if (captureMeta.requestedMonitor) captureLaunchState.monitorId = captureMeta.requestedMonitor;
   if (captureMeta.requestedSource) captureLaunchState.captureSourceName = captureMeta.requestedSource;
+  if (capturePool && (captureMeta.requestedMonitor || captureMeta.sharing !== undefined || captureMeta.verification)) {
+    capturePool.markAlive({
+      peerId: peer?.id || "",
+      monitorId: peer?.monitorId || captureMeta.requestedMonitor || captureLaunchState.monitorId || selectedMonitorId,
+      capture: captureMeta,
+      captureUrl: peerCaptureUrl || captureLaunchState.captureUrl
+    });
+  }
 }
 
 function markCaptureIdle(reason = "idle") {
@@ -717,8 +873,12 @@ function markCaptureIdle(reason = "idle") {
   captureLaunchState.lastReason = reason;
 }
 
-function captureLaunchInFlight() {
-  return captureLaunchState.status === "starting" && Date.now() - captureLaunchState.lastLaunchAt <= CAPTURE_LAUNCH_INFLIGHT_MS;
+function captureLaunchInFlight(monitorId = selectedMonitorId) {
+  const slot = capturePool?.getSlot(monitorId);
+  if (slot?.status === "starting" && Date.now() - Number(slot.lastLaunchAt || 0) <= CAPTURE_LAUNCH_INFLIGHT_MS) return true;
+  return captureLaunchState.status === "starting"
+    && captureLaunchState.monitorId === monitorId
+    && Date.now() - captureLaunchState.lastLaunchAt <= CAPTURE_LAUNCH_INFLIGHT_MS;
 }
 
 function requestCaptureStart(reason = "server-request") {
@@ -783,7 +943,9 @@ function maybeCorrectCaptureSource(reason = "capture-check", rtcState = rtcRoom?
     noteCaptureAutoDetect("single-monitor", "Only one monitor is visible to the host.");
     return false;
   }
-  const host = rtcState?.host;
+  const host = (Array.isArray(rtcState?.hosts)
+    ? rtcState.hosts.find((item) => item?.monitorId === selectedMonitorId || item?.capture?.requestedMonitor === selectedMonitorId)
+    : null) || rtcState?.host;
   const meta = host?.capture;
   if (!host || !meta?.sharing) return false;
   const monitor = monitors.find((item) => item.id === selectedMonitorId);
@@ -795,6 +957,10 @@ function maybeCorrectCaptureSource(reason = "capture-check", rtcState = rtcRoom?
   const wrongRequestedMonitor = requestedMonitor && requestedMonitor !== selectedMonitorId;
   const wrongSize = captureSizeMismatch(meta, monitor);
   const verifiedWrongMonitor = verifiedStatus === "mismatch" && verifiedMonitorId && verifiedMonitorId !== selectedMonitorId;
+  if (wrongRequestedMonitor) {
+    noteCaptureAutoDetect("waiting-selected-monitor", `Ignoring ${requestedMonitor}; selected monitor is ${selectedMonitorId}.`);
+    return false;
+  }
   if (verifiedStatus === "matched" && verifiedMonitorId === selectedMonitorId) {
     captureSourceCorrectionCounts.set(selectedMonitorId, 0);
     noteCaptureAutoDetect("verified", `Video fingerprint matches ${selectedMonitorId}.`);
@@ -813,6 +979,13 @@ function maybeCorrectCaptureSource(reason = "capture-check", rtcState = rtcRoom?
     noteCaptureAutoDetect(wrongSize === true ? "size-mismatch" : "matched", wrongSize === true
       ? `Capture size ${meta.width}x${meta.height} does not match ${selectedMonitorId}; use the capture source controls if the phone shows the wrong display.`
       : `Capture matches ${selectedMonitorId}.`);
+    return false;
+  }
+  if (verifiedWrongMonitor) {
+    noteCaptureAutoDetect(
+      "wrong-monitor",
+      `Chrome selected ${verifiedMonitorId} instead of ${selectedMonitorId}; high-quality video is being held until the correct display is available.`
+    );
     return false;
   }
   const nextSource = cycleCaptureSourceForMonitor(
@@ -860,14 +1033,19 @@ function openExternalUrl(targetUrl) {
 function spawnCaptureBrowser({ autoStart = false, autoSelect = true, reason = "manual", monitorId = selectedMonitorId } = {}) {
   const targetUrl = capturePageUrl({ autoStart, monitorId });
   const captureSourceName = captureSourceNameForMonitor(monitorId);
+  if (autoStart && shouldPreferElectronCapture()) {
+    const electronResult = spawnElectronCaptureHost({ autoStart, reason, monitorId });
+    if (electronResult) return electronResult;
+  }
   const browserPath = findCaptureBrowser();
   if (!browserPath) {
     const fallback = openExternalUrl(targetUrl);
     return { ...fallback, ok: true, captureUrl: targetUrl, autoStart, autoSelect: false, reason, monitorId, captureSourceName };
   }
-  fs.mkdirSync(CAPTURE_BROWSER_PROFILE_DIR, { recursive: true });
+  const profileDir = captureBrowserProfileDir(monitorId);
+  fs.mkdirSync(profileDir, { recursive: true });
   const args = [
-    `--user-data-dir=${CAPTURE_BROWSER_PROFILE_DIR}`,
+    `--user-data-dir=${profileDir}`,
     "--no-first-run",
     "--no-default-browser-check",
     "--disable-session-crashed-bubble",
@@ -883,11 +1061,12 @@ function spawnCaptureBrowser({ autoStart = false, autoSelect = true, reason = "m
   args.push(`--app=${targetUrl}`);
   const child = spawn(browserPath, args, { detached: true, stdio: "ignore" });
   child.unref();
-  scheduleCaptureWindowHide(reason || "capture-launch");
+  scheduleCaptureWindowHide(reason || "capture-launch", monitorId);
   return {
     ok: true,
     captureUrl: targetUrl,
     browserPath,
+    profileDir,
     args,
     mode: "dedicated-chromium",
     autoStart,
@@ -901,15 +1080,17 @@ function spawnCaptureBrowser({ autoStart = false, autoSelect = true, reason = "m
 function ensureCaptureBrowser({ autoStart = true, autoSelect = true, reason = "manual", force = false, monitorId = selectedMonitorId } = {}) {
   const rtcState = rtcRoom ? rtcRoom.getState() : null;
   if (force) {
-    if (rtcState?.hostConnected) {
-      rtcRoom.disconnectPeer(rtcState.host.id, `${reason}-forced-relaunch`);
+    const existingHost = rtcHostForMonitor(rtcState, monitorId);
+    if (existingHost) {
+      rtcRoom.disconnectPeer(existingHost.id, `${reason}-forced-relaunch`);
     }
     markCaptureIdle(`${reason}-forced-relaunch`);
-    stopCaptureBrowserProcesses(`${reason}-forced-relaunch`);
+    stopCaptureBrowserProcesses(`${reason}-forced-relaunch`, monitorId);
   } else if (isFreshRtcHost(rtcState, monitorId)) {
-    const sharing = Boolean(rtcState.host?.capture?.sharing);
+    const existingHost = rtcHostForMonitor(rtcState, monitorId) || rtcState?.host;
+    const sharing = Boolean(existingHost?.capture?.sharing);
     const startRequested = sharing ? false : requestCaptureStart(reason);
-    if (sharing) scheduleCaptureWindowHide(`${reason}-existing-sharing`);
+    if (sharing) scheduleCaptureWindowHide(`${reason}-existing-sharing`, monitorId);
     return {
       ok: true,
       alreadyOpen: true,
@@ -924,12 +1105,12 @@ function ensureCaptureBrowser({ autoStart = true, autoSelect = true, reason = "m
       reason,
       captureLaunch: publicCaptureLaunchState()
     };
-  } else if (rtcState?.hostConnected) {
-    clearStaleRtcHost(rtcState, `${reason}-stale-or-wrong-monitor-relaunch`);
+  } else if (rtcHostForMonitor(rtcState, monitorId)) {
+    clearStaleRtcHost(rtcState, `${reason}-stale-or-wrong-monitor-relaunch`, monitorId);
     markCaptureIdle(`${reason}-stale-relaunch`);
-    stopCaptureBrowserProcesses(`${reason}-stale-relaunch`);
+    stopCaptureBrowserProcesses(`${reason}-stale-relaunch`, monitorId);
   }
-  if (!force && captureLaunchInFlight()) {
+  if (!force && captureLaunchInFlight(monitorId)) {
     return {
       ok: true,
       launchInProgress: true,
@@ -948,19 +1129,50 @@ function ensureCaptureBrowser({ autoStart = true, autoSelect = true, reason = "m
   return { ...result, launched: true, captureLaunch: publicCaptureLaunchState() };
 }
 
+function ensureCapturePoolBrowsers(reason = "capture-pool") {
+  const monitors = capture?.getMonitors?.() || [];
+  if (!monitors.length) return [];
+  return monitors.map((monitor, index) => {
+    const launch = () => {
+      try {
+        return ensureCaptureBrowser({
+          autoStart: true,
+          autoSelect: true,
+          reason: `${reason}-${monitor.id}`,
+          monitorId: monitor.id
+        });
+      } catch (error) {
+        log("host.capture.poolLaunchFailed", { reason, monitorId: monitor.id, error: error.message });
+        return { ok: false, monitorId: monitor.id, error: error.message };
+      }
+    };
+    if (index === 0) return launch();
+    setTimeout(launch, index * 650);
+    return {
+      ok: true,
+      launchScheduled: true,
+      monitorId: monitor.id,
+      reason,
+      delayMs: index * 650
+    };
+  });
+}
+
 function maybeAutoLaunchCapture(reason = "phone-connected") {
   if (!shouldAutoLaunchRtcCapture({ settings })) return false;
   const now = Date.now();
   if (now - lastAutoCaptureLaunchAt < 8000) return false;
   lastAutoCaptureLaunchAt = now;
   try {
-    const result = ensureCaptureBrowser({ autoStart: true, autoSelect: true, reason });
+    const results = ensureCapturePoolBrowsers(reason);
+    const result = results[0] || { ok: false };
     log("host.capture.autoOpened", {
       reason,
       mode: result.mode,
       alreadyOpen: Boolean(result.alreadyOpen),
       launchInProgress: Boolean(result.launchInProgress),
       launched: Boolean(result.launched),
+      poolLaunches: results.length,
       autoStart: result.autoStart,
       autoSelect: result.autoSelect,
       monitorId: result.monitorId || selectedMonitorId,
@@ -1079,6 +1291,12 @@ function handleApi(req, res) {
       .catch((error) => sendJson(res, 500, apiError("CAPTURE_REFERENCE_FAILED", error.message)));
     return;
   }
+  if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/capture-probe") {
+    if (url.searchParams.get("key") !== hostKey && req.headers["x-host-key"] !== hostKey) {
+      return sendJson(res, 403, apiError("BAD_HOST_KEY", "Host key is required for this action."));
+    }
+    return sendJson(res, 200, ensureCaptureProbe(url.searchParams.get("reason") || "capture-verification"));
+  }
   if (req.method === "POST" && url.pathname === "/api/open-capture") {
     if (!requireHostKey(req, res)) return;
     try {
@@ -1122,7 +1340,10 @@ function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/hide-capture-window") {
     if (!requireHostKey(req, res)) return;
     try {
-      const result = hideCaptureBrowserWindow(url.searchParams.get("reason") || "capture-sharing");
+      const result = hideCaptureBrowserWindow(
+        url.searchParams.get("reason") || "capture-sharing",
+        url.searchParams.get("monitor") || selectedMonitorId
+      );
       return sendJson(res, 200, { ok: true, ...result });
     } catch (error) {
       return sendJson(res, 500, apiError("HIDE_CAPTURE_FAILED", error.message));
@@ -1409,7 +1630,8 @@ function authorizeRtcUpgrade(req) {
   if (role === "host") {
     const provided = url.searchParams.get("key") || req.headers["x-host-key"];
     if (provided !== hostKey) return { ok: false, code: "BAD_HOST_KEY" };
-    return { ok: true, role, label: "Laptop capture page" };
+    const monitorId = url.searchParams.get("monitor") || url.searchParams.get("slot") || selectedMonitorId;
+    return { ok: true, role, label: "Laptop capture page", monitorId };
   }
   if (role === "phone") {
     const token = url.searchParams.get("token");
@@ -1580,6 +1802,7 @@ async function handleClientMessage(client, raw) {
     if (requestedMonitor) {
       const previousMonitorId = selectedMonitorId;
       selectedMonitorId = requestedMonitor.id;
+      rtcRoom?.setSelectedMonitor(selectedMonitorId);
       const captureSourceName = captureSourceNameForMonitor(selectedMonitorId);
       captureSourceCorrectionCounts.set(selectedMonitorId, 0);
       noteCaptureAutoDetect("switching", `Selecting ${selectedMonitorId} with ${captureSourceName}.`);
@@ -1650,6 +1873,7 @@ async function handleClientMessage(client, raw) {
       return;
     }
     selectedMonitorId = monitorId;
+    rtcRoom?.setSelectedMonitor(selectedMonitorId);
     if (sourceName === "Auto") {
       captureSourceOverrides.delete(monitorId);
     } else {
@@ -1785,6 +2009,8 @@ function handleRtcUpgrade(req, socket) {
     label: auth.label,
     sessionId: auth.sessionId || null,
     metadata: {
+      monitorId: auth.monitorId || "",
+      slotMonitorId: auth.monitorId || "",
       remoteAddress: req.socket.remoteAddress,
       userAgent: req.headers["user-agent"] || "",
       captureUrl: auth.role === "host" ? new URL(req.url, `http://${req.headers.host}`).href : ""
@@ -1808,7 +2034,7 @@ function handleRtcUpgrade(req, socket) {
       } else if (message.type === "text") {
         const result = rtcRoom.handleMessage(peerId, message.data);
         if (auth.role === "host" && result?.state) {
-          const hostPeer = result.state.host;
+          const hostPeer = (Array.isArray(result.state.hosts) ? result.state.hosts.find((host) => host.id === peerId) : null) || result.state.host;
           if (hostPeer) markCaptureAlive(hostPeer);
           maybeCorrectCaptureSource("rtc-host-metadata", result.state);
         }
@@ -1819,11 +2045,17 @@ function handleRtcUpgrade(req, socket) {
   });
   socket.on("close", () => {
     rtcRoom.disconnectPeer(peerId, "socket-closed");
-    if (auth.role === "host") markCaptureIdle("socket-closed");
+    if (auth.role === "host") {
+      capturePool?.markPeerGone(peerId, "socket-closed");
+      markCaptureIdle("socket-closed");
+    }
   });
   socket.on("error", () => {
     rtcRoom.disconnectPeer(peerId, "socket-error");
-    if (auth.role === "host") markCaptureIdle("socket-error");
+    if (auth.role === "host") {
+      capturePool?.markPeerGone(peerId, "socket-error");
+      markCaptureIdle("socket-error");
+    }
     socket.destroy();
   });
 }
