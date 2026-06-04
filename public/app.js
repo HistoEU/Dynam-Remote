@@ -154,6 +154,7 @@ const state = {
   cursorLensHold: localStorage.getItem("remote-cursor-lens-hold") === "1",
   cursorLensZoom: Number(localStorage.getItem("remote-cursor-lens-zoom") || 1.7),
   cursorLensSize: Number(localStorage.getItem("remote-cursor-lens-size") || 1),
+  wideDesktopMode: localStorage.getItem("remote-wide-desktop-mode") === "1",
   cursorLensActiveUntil: 0,
   cursorLensHoldTimer: null,
   followPausedUntil: 0,
@@ -326,6 +327,7 @@ const el = {
   autoFollowCursor: document.getElementById("autoFollowCursor"),
   cursorLensEnabled: document.getElementById("cursorLensEnabled"),
   cursorLensHold: document.getElementById("cursorLensHold"),
+  wideDesktopMode: document.getElementById("wideDesktopMode"),
   showHalo: document.getElementById("showHalo"),
   hapticsEnabled: document.getElementById("hapticsEnabled"),
   calibrationToggleBtn: document.getElementById("calibrationToggleBtn"),
@@ -1522,7 +1524,7 @@ function resetMonitorViewState({ clearFrame = false } = {}) {
   updateCalibrationUi();
 }
 
-function selectMonitor(monitorId) {
+function selectMonitor(monitorId, options = {}) {
   if (!monitorId || monitorId === state.selectedMonitorId) return false;
   state.selectedMonitorId = monitorId;
   state.pendingMonitorSelectionId = monitorId;
@@ -1543,10 +1545,17 @@ function selectMonitor(monitorId) {
   if (shouldUseRtcReceiver()) {
     scheduleRtcReconnect("monitor-switch", RTC_MONITOR_SWITCH_RECONNECT_DELAY_MS);
   }
-  resetMonitorViewState({ clearFrame: false });
+  if (options.resetView !== false) {
+    resetMonitorViewState({ clearFrame: false });
+  }
   const monitor = state.monitors.find((item) => item.id === state.selectedMonitorId);
   el.monitorName.textContent = monitor ? monitor.name : "Display";
-  send("monitor.select", { monitorId, monitor });
+  send("monitor.select", {
+    monitorId,
+    monitor,
+    centerPointer: options.centerPointer !== false,
+    reason: options.reason || "manual"
+  });
   startStreamWakeBurst("monitor-select-burst");
   renderMonitors();
   drawFrame();
@@ -2447,15 +2456,61 @@ function localCursorFromAbsolute(point, monitor = selectedMonitor()) {
   return mapped || { x: Math.round(Number(point?.x || 0)), y: Math.round(Number(point?.y || 0)) };
 }
 
+function monitorDesktopBounds(monitor, coordinateSpace = "logical-desktop") {
+  if (!monitor) return null;
+  if (coordinateSpace === "physical-desktop") {
+    const bounds = monitor.bounds || {};
+    return {
+      left: Number(bounds.left || 0),
+      top: Number(bounds.top || 0),
+      width: Math.max(1, Number(bounds.width || 1)),
+      height: Math.max(1, Number(bounds.height || 1))
+    };
+  }
+  return monitorLogicalBounds(monitor);
+}
+
+function monitorForDesktopPoint(point = {}, coordinateSpace = "logical-desktop") {
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const desktopSpace = coordinateSpace === "physical-desktop" ? "physical-desktop" : "logical-desktop";
+  return state.monitors.find((monitor) => {
+    const bounds = monitorDesktopBounds(monitor, desktopSpace);
+    if (!bounds) return false;
+    return x >= bounds.left
+      && y >= bounds.top
+      && x <= bounds.left + bounds.width
+      && y <= bounds.top + bounds.height;
+  }) || null;
+}
+
 function updateRemoteCursorFromAck(ack = {}) {
   const point = ack.point;
   const frame = displayFrameForCursor();
   if (!frame || !point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) return;
+  const coordinateSpace = ack.coordinateSpace || "logical-desktop";
+  const wideMonitor = state.wideDesktopMode
+    ? monitorForDesktopPoint(point, coordinateSpace)
+    : null;
+  const monitor = wideMonitor || selectedMonitor();
+  if (
+    state.wideDesktopMode
+    && wideMonitor
+    && wideMonitor.id !== state.selectedMonitorId
+    && !activePendingMonitorSelection()
+  ) {
+    selectMonitor(wideMonitor.id, {
+      centerPointer: false,
+      reason: "wide-desktop-cursor",
+      resetView: false
+    });
+  }
   const local = mapHostCursorToFrame({
     ...point,
-    coordinateSpace: ack.coordinateSpace || "logical-desktop",
+    coordinateSpace,
     source: "ack"
-  }, selectedMonitor(), frame);
+  }, monitor, frame);
   if (!local) return;
   const { width, height } = frameSourceSize(frame);
   state.lastAckCursor = {
@@ -2560,10 +2615,13 @@ function drawCursorLens(frame, metrics, sourceW, sourceH, sourceElement = state.
   const imageH = sourceElement.videoHeight || sourceElement.naturalHeight || sourceElement.height || sourceH;
   const viewportW = Math.max(1, Number(metrics.stageW || metrics.drawW || 1));
   const viewportH = Math.max(1, Number(metrics.stageH || metrics.drawH || 1));
-  const maxLensW = Math.max(1, Math.min(metrics.drawW, viewportW) - CURSOR_LENS_MARGIN * 2);
-  const maxLensH = Math.max(1, Math.min(metrics.drawH, viewportH) * CURSOR_LENS_VIEWPORT_H);
   const lensSize = clamp(Number(state.cursorLensSize) || 1, 0.65, 1.35);
-  const lensZoom = clamp(Number(state.cursorLensZoom) || 1.7, 1.15, 3);
+  const lensZoom = clamp(Number(state.cursorLensZoom) || 1.7, 1.15, DISPLAY_STAGE_MAX_ZOOM);
+  const maxLensW = Math.max(1, Math.min(metrics.drawW, viewportW) - CURSOR_LENS_MARGIN * 2);
+  const maxLensH = Math.max(
+    1,
+    Math.min(metrics.drawH, viewportH) * clamp(CURSOR_LENS_VIEWPORT_H * lensSize, 0.42, 0.9)
+  );
   let lensW = Math.min(
     maxLensW,
     CURSOR_LENS_MAX_W * lensSize,
@@ -2575,8 +2633,10 @@ function drawCursorLens(frame, metrics, sourceW, sourceH, sourceElement = state.
     lensW = Math.min(maxLensW, lensH / 0.68);
   }
   const lensAspect = lensH / Math.max(1, lensW);
-  const sourceLensW = Math.min(sourceW, Math.max(120, sourceW * 0.22 / lensZoom));
-  const sourceLensH = Math.min(sourceH, Math.max(132, sourceLensW * lensAspect));
+  const minSourceLensW = Math.max(42, sourceW * 0.055);
+  const minSourceLensH = Math.max(32, sourceH * 0.055);
+  const sourceLensW = Math.min(sourceW, Math.max(minSourceLensW, sourceW * 0.34 / lensZoom));
+  const sourceLensH = Math.min(sourceH, Math.max(minSourceLensH, sourceLensW * lensAspect));
   const minLensX = CURSOR_LENS_MARGIN;
   const maxLensX = Math.max(minLensX, viewportW - lensW - CURSOR_LENS_MARGIN);
   const minLensY = CURSOR_LENS_MARGIN;
@@ -2963,6 +3023,8 @@ function updatePreferenceUi() {
   if (el.scrollSpeedValue) el.scrollSpeedValue.textContent = `${Math.round(state.scrollSpeed * 100)}%`;
   if (el.autoFollowCursor) el.autoFollowCursor.checked = state.autoFollowCursor;
   if (el.cursorLensEnabled) el.cursorLensEnabled.checked = state.cursorLensEnabled;
+  if (el.wideDesktopMode) el.wideDesktopMode.checked = state.wideDesktopMode;
+  el.controller?.classList.toggle("wide-desktop", state.wideDesktopMode);
   if (el.followCursorBtn) {
     const zoomActive = isZoomModeActive();
     el.followCursorBtn.classList.toggle("follow-active", zoomActive);
@@ -3054,6 +3116,14 @@ function setCursorLensEnabled(enabled, options = {}) {
     updateDiagnostics();
   }
   state.lastCanvasPaintAt = performance.now();
+}
+
+function setWideDesktopMode(enabled) {
+  state.wideDesktopMode = Boolean(enabled);
+  localStorage.setItem("remote-wide-desktop-mode", state.wideDesktopMode ? "1" : "0");
+  updatePreferenceUi();
+  drawFrame();
+  updateDiagnostics();
 }
 
 function setScrollSpeed(value) {
@@ -4084,6 +4154,9 @@ function bindControls() {
   el.cursorLensHold?.addEventListener("change", () => {
     setCursorLensHold(el.cursorLensHold.checked);
   });
+  el.wideDesktopMode?.addEventListener("change", () => {
+    setWideDesktopMode(el.wideDesktopMode.checked);
+  });
   el.showHalo.addEventListener("change", () => {
     setHaloEnabled(el.showHalo.checked);
   });
@@ -4438,7 +4511,7 @@ if ("serviceWorker" in navigator) {
       if (!worker || !navigator.serviceWorker.controller) return;
       worker.addEventListener("statechange", () => {
         if (worker.state !== "installed") return;
-        const reloadKey = "remote-controller-shell-v88-reloaded";
+        const reloadKey = "remote-controller-shell-v89-reloaded";
         if (sessionStorage.getItem(reloadKey) === "1") return;
         sessionStorage.setItem(reloadKey, "1");
         location.reload();
@@ -4509,6 +4582,8 @@ window.__remoteControllerDebug = {
   setCursorLensHold,
   setCursorLensZoom,
   setCursorLensSize,
+  setWideDesktopMode,
+  monitorForDesktopPoint,
   markCursorLensMoving,
   isCursorLensCurrentlyAllowed,
   monitorCalibrationSignature,

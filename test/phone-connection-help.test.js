@@ -1779,6 +1779,78 @@ test("phone monitor selection ack moves the visible cursor to the new display ce
   }
 });
 
+test("phone wide desktop mode follows the cursor into adjacent monitors without recentering", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      const sent = [];
+      const debug = window.__remoteControllerDebug;
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      debug.state.ws = {
+        readyState: WebSocket.OPEN,
+        send(value) {
+          sent.push(JSON.parse(value));
+        }
+      };
+      debug.state.monitors = [
+        {
+          id: "display-1",
+          name: "Display 1",
+          bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1
+        },
+        {
+          id: "display-2",
+          name: "Display 2",
+          bounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 1920, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1
+        }
+      ];
+      debug.state.selectedMonitorId = "display-1";
+      debug.state.frame = {
+        monitorId: "display-1",
+        width: 1920,
+        height: 1080,
+        windows: [],
+        cursor: { x: 1912, y: 540, coordinateSpace: "physical-frame", visible: true }
+      };
+      debug.setWideDesktopMode(true);
+      debug.updateRemoteCursorFromAck({
+        ackType: "pointer.move",
+        point: { x: 1998, y: 540 },
+        coordinateSpace: "logical-desktop"
+      });
+      const monitorSelect = sent.find((item) => item.type === "monitor.select");
+      return {
+        enabled: debug.state.wideDesktopMode,
+        selectedMonitorId: debug.state.selectedMonitorId,
+        monitorSelect,
+        cursor: debug.state.lastAckCursor
+      };
+    });
+
+    assert.equal(result.enabled, true);
+    assert.equal(result.selectedMonitorId, "display-2");
+    assert.equal(result.monitorSelect.payload.monitorId, "display-2");
+    assert.equal(result.monitorSelect.payload.centerPointer, false);
+    assert.equal(result.monitorSelect.payload.reason, "wide-desktop-cursor");
+    assert.equal(result.cursor.source, "ack");
+    assert.ok(result.cursor.x < 120);
+    assert.equal(result.cursor.y, 540);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("phone ignores stale stream frames from the previous monitor after a display switch", async () => {
   const browser = await chromium.launch();
   try {
@@ -2294,6 +2366,94 @@ test("phone follow control auto-zooms and draws a cursor lens", async () => {
     assert.equal(result.off.pressed, "false");
     assert.equal(result.off.lensBox, null);
     assert.equal(result.off.checkbox, false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("phone settings sliders visibly change cursor lens size and magnification", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(async () => {
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      const source = document.createElement("canvas");
+      source.width = 640;
+      source.height = 360;
+      const srcCtx = source.getContext("2d");
+      for (let x = 0; x < source.width; x += 16) {
+        for (let y = 0; y < source.height; y += 16) {
+          srcCtx.fillStyle = ((x + y) / 16) % 2 === 0 ? "#d6a84a" : "#111111";
+          srcCtx.fillRect(x, y, 16, 16);
+        }
+      }
+      srcCtx.fillStyle = "#ffffff";
+      srcCtx.fillRect(300, 160, 40, 40);
+      const image = new Image();
+      const dataUrl = source.toDataURL("image/png");
+      await new Promise((resolve) => {
+        image.onload = resolve;
+        image.src = dataUrl;
+      });
+      const debug = window.__remoteControllerDebug;
+      debug.state.frameImage = image;
+      debug.state.frameImageReady = true;
+      debug.state.monitors = [{
+        id: "display-1",
+        bounds: { left: 0, top: 0, width: 640, height: 360 },
+        logicalBounds: { left: 0, top: 0, width: 640, height: 360 },
+        scaleFactor: 1
+      }];
+      debug.state.selectedMonitorId = "display-1";
+      debug.state.frame = debug.normalizeIncomingFrame({
+        monitorId: "display-1",
+        width: 640,
+        height: 360,
+        imageDataUrl: dataUrl,
+        cursor: { x: 320, y: 180, coordinateSpace: "physical-frame", visible: true }
+      });
+      debug.setViewportZoom(1.8);
+      debug.setAutoFollowCursor(true);
+      debug.setCursorLensEnabled(true);
+      debug.setCursorLensSize(0.7);
+      debug.setCursorLensZoom(1.2);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const small = { ...debug.state.lastCursorLensBox };
+
+      document.querySelector('[data-sheet="settingsSheet"]').click();
+      const size = document.getElementById("lensSizeRange");
+      const zoom = document.getElementById("lensZoomRange");
+      size.value = "1.3";
+      size.dispatchEvent(new Event("input", { bubbles: true }));
+      zoom.value = "4.2";
+      zoom.dispatchEvent(new Event("input", { bubbles: true }));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const large = { ...debug.state.lastCursorLensBox };
+
+      return {
+        sizeLabel: document.getElementById("lensSizeValue").textContent,
+        zoomLabel: document.getElementById("lensZoomValue").textContent,
+        stateSize: debug.state.cursorLensSize,
+        stateZoom: debug.state.cursorLensZoom,
+        small,
+        large
+      };
+    });
+
+    assert.equal(result.sizeLabel, "130%");
+    assert.equal(result.zoomLabel, "420%");
+    assert.equal(result.stateSize, 1.3);
+    assert.equal(result.stateZoom, 4.2);
+    assert.ok(result.large.width > result.small.width * 1.25);
+    assert.ok(result.large.height > result.small.height * 1.25);
+    assert.ok(result.large.sourceLensW < result.small.sourceLensW * 0.5);
+    assert.ok(result.large.sourceLensH < result.small.sourceLensH * 0.6);
   } finally {
     await browser.close();
   }

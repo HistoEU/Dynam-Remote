@@ -1814,7 +1814,8 @@ async function handleClientMessage(client, raw) {
         sourceId: requestedMonitor.sourceId || ""
       });
       let centeredPointer = null;
-      if (client.session.approved && client.session.permissions?.pointer) {
+      const shouldCenterPointer = payload.centerPointer !== false;
+      if (shouldCenterPointer && client.session.approved && client.session.permissions?.pointer) {
         try {
           centeredPointer = await input.centerOnMonitor(requestedMonitor);
           if (centeredPointer) {
