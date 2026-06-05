@@ -1940,6 +1940,92 @@ test("phone virtual ultrawide FOV follows cursor across monitor seams without sw
   }
 });
 
+test("phone virtual ultrawide flattens staggered displays and keeps cursor local", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true
+    });
+    await page.goto(baseUrl, { waitUntil: "load" });
+    const result = await page.evaluate(() => {
+      const debug = window.__remoteControllerDebug;
+      const sent = [];
+      document.getElementById("pairing").classList.add("hidden");
+      document.getElementById("controller").classList.remove("hidden");
+      debug.state.connected = true;
+      debug.state.approved = true;
+      debug.state.ws = {
+        readyState: WebSocket.OPEN,
+        send(value) {
+          sent.push(JSON.parse(value));
+        }
+      };
+      debug.state.autoFollowCursor = false;
+      debug.state.selectedMonitorId = "display-3";
+      debug.state.monitors = [
+        {
+          id: "display-1",
+          name: "Display 1",
+          bounds: { left: 1920, top: 131, width: 1920, height: 1080 },
+          logicalBounds: { left: 1920, top: 131, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape"
+        },
+        {
+          id: "display-2",
+          name: "Display 2",
+          bounds: { left: -1920, top: 139, width: 1920, height: 1080 },
+          logicalBounds: { left: -1920, top: 139, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape"
+        },
+        {
+          id: "display-3",
+          name: "Display 3",
+          bounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          logicalBounds: { left: 0, top: 0, width: 1920, height: 1080 },
+          scaleFactor: 1,
+          orientation: "landscape"
+        }
+      ];
+
+      debug.setVirtualDesktopMode(true, { skipReconnect: true });
+      debug.state.followPausedUntil = performance.now() + 10000;
+      debug.updateRemoteCursorFromAck({
+        ackType: "pointer.move",
+        point: { x: 1960, y: 671, visible: true },
+        coordinateSpace: "logical-desktop"
+      });
+      const layout = debug.virtualDesktopLayout();
+      const viewport = debug.virtualViewportSourceRect({ width: 390, height: 844 });
+      return {
+        autoFollowCursor: debug.state.autoFollowCursor,
+        followPaused: debug.state.followPausedUntil > performance.now(),
+        layout: layout.monitors.map((item) => ({ id: item.id, x: item.x, y: item.y, width: item.width, height: item.height })),
+        cursor: debug.state.virtualCursor,
+        viewport,
+        monitorSelect: sent.find((item) => item.type === "monitor.select")
+      };
+    });
+
+    assert.equal(result.autoFollowCursor, true);
+    assert.equal(result.followPaused, false);
+    assert.deepEqual(result.layout.map((item) => item.id), ["display-2", "display-3", "display-1"]);
+    assert.deepEqual(result.layout.map((item) => item.x), [0, 1920, 3840]);
+    assert.deepEqual(result.layout.map((item) => item.y), [0, 0, 0]);
+    assert.equal(result.cursor.monitorId, "display-1");
+    assert.equal(result.cursor.x, 3880);
+    assert.equal(result.cursor.y, 540);
+    assert.ok(result.viewport.sx < 3840);
+    assert.ok(result.viewport.sx + result.viewport.sw > 3840);
+    assert.equal(result.monitorSelect, undefined);
+  } finally {
+    await browser.close();
+  }
+});
+
 test("phone virtual RTC keeps audio tracks from replacing screen video", async () => {
   const browser = await chromium.launch();
   try {

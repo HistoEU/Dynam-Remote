@@ -2519,7 +2519,7 @@ function updateZoomUi() {
 function setViewportZoom(value, options = {}) {
   const focal = options.focalCanvasPoint || null;
   const beforeFocus = focal ? normalizeCanvasPoint(focal) : null;
-  const metrics = frameMetrics();
+  const metrics = activeViewportBaseMetrics();
   state.viewportZoom = clamp(Number(value) || 1, 1, DISPLAY_STAGE_MAX_ZOOM);
   if (state.viewportZoom <= 1.01) {
     state.viewportZoom = 1;
@@ -2546,7 +2546,7 @@ function setViewportZoom(value, options = {}) {
 }
 
 function setViewportPan(panX, panY, options = {}) {
-  const metrics = frameMetrics();
+  const metrics = activeViewportBaseMetrics();
   const zoom = Math.max(1, Number(state.viewportZoom) || 1);
   if (options.units === "stage") {
     state.stagePanX = Number(panX) || 0;
@@ -2698,7 +2698,7 @@ function updateRtcVideoViewport() {
 }
 
 function normalizeCanvasPoint(point) {
-  const metrics = displayStageMetrics();
+  const metrics = activeViewportStageMetrics();
   const rawX = (point.x - metrics.dx) / Math.max(1, metrics.drawW);
   const rawY = (point.y - metrics.dy) / Math.max(1, metrics.drawH);
   const insideStage = rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1;
@@ -2709,6 +2709,18 @@ function normalizeCanvasPoint(point) {
     rawNormalizedY: rawY,
     insideStage
   };
+}
+
+function activeViewportBaseMetrics(rect = el.canvas.getBoundingClientRect()) {
+  if (state.virtualDesktopMode) {
+    const layout = virtualDesktopLayout();
+    return sourceMetrics(layout.width, layout.height, rect);
+  }
+  return frameMetrics(displayFrameForCursor(), rect);
+}
+
+function activeViewportStageMetrics(rect = el.canvas.getBoundingClientRect()) {
+  return stageMetricsFromBase(activeViewportBaseMetrics(rect));
 }
 
 function remoteCursorNormalized() {
@@ -2819,7 +2831,8 @@ function virtualDesktopLayout(monitors = state.monitors, coordinateSpace = "logi
         height: Math.max(1, Number(bounds.height || 1))
       };
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort((a, b) => a.left - b.left || a.top - b.top || String(a.id).localeCompare(String(b.id)));
   if (!items.length) {
     const monitor = selectedMonitor();
     const fallbackW = Math.max(1, Number(monitor?.bounds?.width || state.rtcVideoWidth || 1280));
@@ -2835,25 +2848,33 @@ function virtualDesktopLayout(monitors = state.monitors, coordinateSpace = "logi
       monitors: []
     };
   }
-  const left = Math.min(...items.map((item) => item.left));
-  const top = Math.min(...items.map((item) => item.top));
-  const right = Math.max(...items.map((item) => item.left + item.width));
-  const bottom = Math.max(...items.map((item) => item.top + item.height));
+  let nextX = 0;
+  const stripItems = items.map((item) => {
+    const x = nextX;
+    nextX += item.width;
+    return {
+      ...item,
+      desktopLeft: item.left,
+      desktopTop: item.top,
+      desktopRight: item.left + item.width,
+      desktopBottom: item.top + item.height,
+      x,
+      y: 0,
+      right: x + item.width,
+      bottom: item.height
+    };
+  });
+  const width = Math.max(1, nextX);
+  const height = Math.max(1, ...stripItems.map((item) => item.height));
   return {
     coordinateSpace,
-    left,
-    top,
-    right,
-    bottom,
-    width: Math.max(1, right - left),
-    height: Math.max(1, bottom - top),
-    monitors: items.map((item) => ({
-      ...item,
-      x: item.left - left,
-      y: item.top - top,
-      right: item.left - left + item.width,
-      bottom: item.top - top + item.height
-    }))
+    left: 0,
+    top: 0,
+    right: width,
+    bottom: height,
+    width,
+    height,
+    monitors: stripItems
   };
 }
 
@@ -2896,9 +2917,13 @@ function setVirtualCursorFromDesktopPoint(point = {}, coordinateSpace = "logical
   const y = Number(point.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
   const monitor = monitorForDesktopPoint(point, coordinateSpace);
+  const rect = monitor ? virtualMonitorRect(monitor.id, layout) : null;
+  const bounds = monitor ? monitorDesktopBounds(monitor, layout.coordinateSpace) : null;
+  const localX = bounds ? x - bounds.left : x - layout.left;
+  const localY = bounds ? y - bounds.top : y - layout.top;
   state.virtualCursor = {
-    x: clamp(x - layout.left, 0, layout.width),
-    y: clamp(y - layout.top, 0, layout.height),
+    x: rect ? rect.x + clamp(localX, 0, rect.width) : clamp(localX, 0, layout.width),
+    y: rect ? rect.y + clamp(localY, 0, rect.height) : clamp(localY, 0, layout.height),
     visible: point.visible !== false,
     coordinateSpace: layout.coordinateSpace,
     source: point.source || "ack",
@@ -2958,6 +2983,7 @@ function updateRemoteCursorFromAck(ack = {}) {
       source: "ack"
     }, coordinateSpace);
     if (!cursor) return;
+    state.followPausedUntil = 0;
     followVirtualViewportTowardCursor({ force: false, strength: 0.72, skipDraw: true });
     drawFrame();
     return;
@@ -3700,6 +3726,10 @@ function setVirtualDesktopMode(enabled, options = {}) {
   state.virtualDesktopMode = Boolean(enabled);
   localStorage.setItem("remote-virtual-desktop-mode", state.virtualDesktopMode ? "1" : "0");
   if (state.virtualDesktopMode) {
+    if (!state.autoFollowCursor) {
+      state.autoFollowCursor = true;
+      localStorage.setItem("remote-auto-follow-cursor", "1");
+    }
     initializeVirtualDesktopView(options);
     closeRtcPeer();
     if (el.rtcVideo) {
